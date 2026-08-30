@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import Any
 
 from core.ir import Basis
+from shared.exchange import attach_public_url
 
 
 def ok(
@@ -38,6 +39,22 @@ def ok(
     if basis is not None:
         response["basis"] = basis
     response.update(extra)
+    # A produced file that is served publicly comes back with the URL that
+    # reaches it. Every file-producing tool here already reports its path as
+    # `result["out"]`, so this is one place rather than six -- and
+    # attach_public_url is a no-op unless MCP_PUBLIC_BASE_URL is set AND the
+    # file is inside MCP_OUTPUT_DIR, so a local stdio install is unaffected.
+    #
+    # This was written and never called. shared/exchange.py has carried
+    # attach_public_url since the file arrived from a sibling and nothing in
+    # this repo used it, so a remote caller got an absolute path INSIDE the
+    # container -- which they cannot open, and cannot tell from one they can.
+    #
+    # Success only, deliberately. redact() reports `out` on failure too, and
+    # that is the file whose own hint says "Do not distribute this file";
+    # handing back a public URL for it would be the opposite of the warning.
+    if isinstance(result, dict) and result.get("out"):
+        attach_public_url(result, str(result["out"]))
     response["progress"] = progress or []
     response["token_estimate"] = len(str(response)) // 4
     return response
