@@ -149,7 +149,30 @@ class Page:
 
     @property
     def char_count(self) -> int:
-        return sum(len(s.text) for b in self.blocks for s in b.spans)
+        """How much text this page holds, counted the way `text` reads it.
+
+        From `text`, NOT from the blocks -- for exactly the reason `text` above
+        and `is_scanned` below are both written the way they are. Summing the
+        spans counts whichever blocks happen to be cached, and
+        `load_page_words` REPLACES a page's line blocks with one block per
+        word, dropping every space between them:
+
+            probe()                        -> 171,634 tokens, 8 pages fit
+            extract(pages='6-7'); probe()  -> 171,516 tokens
+            (all 183 pages read); probe()  -> 149,410 tokens, 9 pages fit
+
+        Same document, same call. `token_estimate_full` is the number whose
+        whole job is telling a caller why they must not ask for the document at
+        once, and it shrank by 12.9% as they read it -- downward, which is the
+        dangerous direction, and far enough to move
+        `pages_that_fit_one_response` from 8 to 9, so the range probe suggests
+        overflows the response it was sized for.
+
+        Round 2 introduced `raw_text` and routed `text` and `is_scanned`
+        through it. This property sits between those two and was left counting
+        blocks.
+        """
+        return len(self.text)
 
     @property
     def is_scanned(self) -> bool:
