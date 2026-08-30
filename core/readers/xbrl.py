@@ -1,4 +1,4 @@
-"""XBRL instance -> core.ir.Document, via lxml.
+"""XBRL instance -> core.ir.Document, via the stdlib XML parser.
 
 The only format this server reads whose numbers arrive already tagged.
 
@@ -61,13 +61,20 @@ def _error(message: str, hint: str):
 
 
 def open_document(path: str, password: str = "") -> Document:
-    """Read an XBRL instance: every fact, with its context and unit."""
-    from lxml import etree
+    """Read an XBRL instance: every fact, with its context and unit.
+
+    The stdlib parser, not lxml. Every other XML-ish reader here uses lxml
+    because it recovers from malformed markup the way a browser does, and real
+    HTML needs that. An XBRL instance does not: it is machine-generated and
+    well-formed by definition, so the recovery buys nothing and the dependency
+    costs a stub problem on three CI runners.
+    """
+    import xml.etree.ElementTree as ET
 
     src = _flow.guard_size(path)
     try:
-        tree = etree.parse(str(src))
-    except etree.XMLSyntaxError as exc:
+        tree = ET.parse(str(src))
+    except ET.ParseError as exc:
         raise _error(
             f"{src.name} is not readable XML: {exc}",
             "The file may be truncated. An XBRL instance is XML; check it opens in a browser.",
@@ -84,7 +91,7 @@ def open_document(path: str, password: str = "") -> Document:
         value = (element.text or "").strip()
         if not ref or not value:
             continue
-        name = etree.QName(element).localname
+        name = _local(element.tag)
         if name.endswith(TEXT_BLOCK_SUFFIX):
             narrative.append((name, value))
             continue
@@ -167,6 +174,11 @@ def _humanise(name: str) -> str:
     return stem.replace("Disclosureof", "Disclosure of ").strip() or name
 
 
+def _local(tag: object) -> str:
+    """The local name of a namespaced tag: `{ns}Assets` -> `Assets`."""
+    return str(tag).rsplit("}", 1)[-1]
+
+
 def _contexts(root) -> dict[str, str]:
     """Context id -> a readable period, with any dimensional members.
 
@@ -175,8 +187,6 @@ def _contexts(root) -> dict[str, str]:
     parseable and are a filer convention, not a rule -- an SEC instance numbers
     them `c-3`, which carries the same meaning and none of the same text.
     """
-    from lxml import etree
-
     out: dict[str, str] = {}
     for context in root.iter(f"{XBRLI}context"):
         cid = context.get("id")
@@ -195,7 +205,7 @@ def _contexts(root) -> dict[str, str]:
         members = [
             (member.text or "").strip().split(":")[-1]
             for member in context.iter()
-            if etree.QName(member).localname == "explicitMember" and member.text
+            if _local(member.tag) == "explicitMember" and member.text
         ]
         out[cid] = f"{period} [{', '.join(members)}]" if members else period
     return out
@@ -203,18 +213,12 @@ def _contexts(root) -> dict[str, str]:
 
 def _units(root) -> dict[str, str]:
     """Unit id -> its measure, e.g. `iso4217:IDR` -> `IDR`, `xbrli:shares`."""
-    from lxml import etree
-
     out: dict[str, str] = {}
     for unit in root.iter(f"{XBRLI}unit"):
         uid = unit.get("id")
         if not uid:
             continue
-        measures = [
-            (m.text or "").strip().split(":")[-1]
-            for m in unit.iter()
-            if etree.QName(m).localname == "measure" and m.text
-        ]
+        measures = [(m.text or "").strip().split(":")[-1] for m in unit.iter() if _local(m.tag) == "measure" and m.text]
         out[uid] = "/".join(measures)
     return out
 

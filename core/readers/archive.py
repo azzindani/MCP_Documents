@@ -214,8 +214,13 @@ def probe_extras(doc: Document) -> dict:
     `open_with` is the point of the whole reader: a caller who probes an archive
     must be told the syntax for reading a member, or the listing is a dead end.
     """
-    members = doc.meta.get("members", [])
-    readable = [m["name"] for m in members if m["readable"]]
+    # `Document.meta` is `dict[str, object]`, so this narrows with a real
+    # isinstance check rather than a cast. A cast would silence the type checker
+    # by assertion; this one is also the runtime guard for a Document whose meta
+    # did not come from open_document above.
+    raw = doc.meta.get("members")
+    members: list[dict] = [m for m in raw if isinstance(m, dict)] if isinstance(raw, list) else []
+    readable = [str(m["name"]) for m in members if m["readable"]]
     name = Path(doc.source).name
     extras = {
         "member_count": doc.meta.get("member_count", 0),
