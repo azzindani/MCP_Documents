@@ -16,6 +16,8 @@ can already open is supported, and is what "unlock" usually means in practice.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
+from decimal import Decimal
 
 import pikepdf
 
@@ -220,26 +222,56 @@ def _strip_from_page(pdf: pikepdf.Pdf, page: pikepdf.Page, matcher: re.Pattern) 
     because drawing leaves the glyphs behind for any extractor to read. Tj and
     ' take a single string; TJ takes an array of strings and kerning numbers.
 
-    This works where the text is stored as readable bytes. Where a subset font
-    encodes it otherwise the operators will not match, nothing is removed, and
-    the verification step below refuses the file -- which is the correct
-    outcome, and the reason verification is not optional.
+    **The operand bytes are not the text.** They were read as Latin-1 here,
+    which is true only of a PDF whose text is set in a base-14 font with no
+    subsetting -- the fixture corpus, and almost nothing produced by real
+    software. LibreOffice, Word and every modern producer embed a SUBSET font
+    and address it by glyph index, so `1450.50` reaches this function as
+    b'\\x1e\\x00\\x00\\x00!" ...'. Matching that against the pattern found
+    nothing, removed nothing, and the verification step then refused the file.
+    The refusal was correct and the capability was absent: a redaction that
+    cannot redact a PDF made by a word processor is not a redaction tool.
+
+    So each font's /ToUnicode CMap is used to turn glyph codes back into the
+    text they draw, and the current font is tracked through Tf. Where a font
+    has no /ToUnicode there is nothing to decode with and the Latin-1 reading
+    stands, which is the old behaviour for the old case.
     """
+    decoders = _font_decoders(page)
+    decode: Callable[[bytes], str] | None = None
     removed = 0
     instructions = []
     for operands, operator in pikepdf.parse_content_stream(page):
         name = str(operator)
-        if name in {"Tj", "'", '"'} and operands:
-            text = _as_text(operands[-1])
+        if name == "Tf" and operands:
+            # Tf is `/F1 12 Tf`: the resource name, then the size. Every
+            # text-showing operator after it draws in that font until the next
+            # one, which is why this cannot be decided per operator.
+            decode = decoders.get(str(operands[0]))
+        elif name in {"Tj", "'", '"'} and operands:
+            text = _as_text(operands[-1], decode)
             if text and matcher.search(text):
                 removed += 1
                 continue
         elif name == "TJ" and operands:
             array = operands[0]
-            # A TJ operand is a pikepdf Array of strings and kerning numbers.
-            # pikepdf types it as the generic Object, which pyright does not
-            # know is iterable; it is, and _as_text drops the numbers.
-            joined = "".join(_as_text(item) or "" for item in array)  # type: ignore[union-attr]
+            # A TJ operand is an Array of strings and kerning numbers, and the
+            # numbers have to be SKIPPED rather than converted. pikepdf hands
+            # them back as Python ints, and `bytes(3)` is not the digit 3 -- it
+            # is three NUL bytes, because bytes(int) allocates that many zeros.
+            # So each kern spliced NULs into the middle of the text (or raised
+            # ValueError for a negative kern, dropping that run entirely), and
+            # `1450.50` set with kerning could never match the pattern
+            # `1450.50` however it was encoded. The old comment here said the
+            # numbers were dropped; nothing dropped them.
+            #
+            # pyright types the operand as the generic Object and does not know
+            # it is iterable. It is.
+            joined = "".join(
+                _as_text(item, decode) or ""
+                for item in array  # type: ignore[union-attr]
+                if not isinstance(item, (int, float, Decimal))
+            )
             if joined and matcher.search(joined):
                 removed += 1
                 continue
@@ -249,11 +281,105 @@ def _strip_from_page(pdf: pikepdf.Pdf, page: pikepdf.Page, matcher: re.Pattern) 
     return removed
 
 
-def _as_text(operand) -> str | None:
+def _as_text(operand, decode: Callable[[bytes], str] | None = None) -> str | None:
     try:
-        return bytes(operand).decode("latin-1")
-    except TypeError, ValueError, UnicodeDecodeError:
+        raw = bytes(operand)
+    except TypeError, ValueError:
         return None
+    if decode is not None:
+        return decode(raw)
+    try:
+        return raw.decode("latin-1")
+    except ValueError, UnicodeDecodeError:
+        return None
+
+
+def _font_decoders(page: pikepdf.Page) -> dict[str, Callable[[bytes], str]]:
+    """Resource name -> a bytes-to-text decoder, for each font that has one.
+
+    Absent for a font with no /ToUnicode, so the caller falls back rather than
+    decoding through a map that does not exist.
+    """
+    out: dict[str, Callable[[bytes], str]] = {}
+    try:
+        fonts = page.get("/Resources", {}).get("/Font", {})  # type: ignore[union-attr]
+    except AttributeError, KeyError:
+        return out
+    for name, font in dict(fonts).items():  # type: ignore[arg-type]
+        try:
+            built = _tounicode_decoder(font)
+        except Exception:  # noqa: BLE001 - a malformed CMap must not lose the page
+            built = None
+        if built is not None:
+            out[str(name)] = built
+    return out
+
+
+# One entry of a bfrange: `<lo> <hi> <dst>` or `<lo> <hi> [<d1> <d2> ...]`.
+# Written as one alternation scanned left to right rather than two passes,
+# because a two-pass version matches three consecutive `<...>` tokens INSIDE an
+# array as if they were a single-destination entry.
+_BFRANGE = re.compile(
+    r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*(?:\[((?:\s*<[0-9A-Fa-f]+>)*)\s*\]|<([0-9A-Fa-f]+)>)",
+    re.S,
+)
+_BFCHAR = re.compile(r"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>")
+_HEX = re.compile(r"<([0-9A-Fa-f]+)>")
+
+
+def _tounicode_decoder(font) -> Callable[[bytes], str] | None:
+    """Build a decoder from a font's /ToUnicode CMap, or None if it has none."""
+    stream = font.get("/ToUnicode") if hasattr(font, "get") else None
+    if stream is None:
+        return None
+    text = bytes(stream.read_bytes()).decode("latin-1", "replace")
+
+    mapping: dict[int, str] = {}
+    widths: set[int] = set()
+
+    for block in re.findall(r"begincodespacerange(.*?)endcodespacerange", text, re.S):
+        for low, _high in _BFCHAR.findall(block):
+            widths.add(len(low) // 2)
+    for block in re.findall(r"beginbfchar(.*?)endbfchar", text, re.S):
+        for source, destination in _BFCHAR.findall(block):
+            widths.add(len(source) // 2)
+            mapping[int(source, 16)] = _utf16be(destination)
+    for block in re.findall(r"beginbfrange(.*?)endbfrange", text, re.S):
+        for low, high, array, single in _BFRANGE.findall(block):
+            widths.add(len(low) // 2)
+            start, end = int(low, 16), int(high, 16)
+            if array:
+                for offset, destination in enumerate(_HEX.findall(array)):
+                    mapping[start + offset] = _utf16be(destination)
+            else:
+                # A range's destination increments in its LAST code unit, so
+                # <20> <2F> <0041> is A..P, not sixteen copies of A.
+                for offset in range(end - start + 1):
+                    mapping[start + offset] = _utf16be(single, offset)
+
+    if not mapping:
+        return None
+    width = 2 if widths == {2} else 1
+
+    def decode(raw: bytes) -> str:
+        if width == 1:
+            codes = list(raw)
+        else:
+            codes = [int.from_bytes(raw[i : i + 2], "big") for i in range(0, len(raw) - 1, 2)]
+        # An unmapped code becomes U+FFFD rather than nothing. Dropping it
+        # would close the gap and let a pattern match across a glyph that is
+        # not there -- redacting text the caller never asked about.
+        return "".join(mapping.get(code, "�") for code in codes)
+
+    return decode
+
+
+def _utf16be(hex_digits: str, offset: int = 0) -> str:
+    raw = bytes.fromhex(hex_digits if len(hex_digits) % 2 == 0 else "0" + hex_digits)
+    if offset and len(raw) >= 2:
+        value = (int.from_bytes(raw[-2:], "big") + offset) & 0xFFFF
+        raw = raw[:-2] + value.to_bytes(2, "big")
+    return raw.decode("utf-16-be", "replace")
 
 
 def _still_extractable(path, matcher: re.Pattern, pages: list[int]) -> list[int]:

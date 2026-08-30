@@ -41,13 +41,43 @@ def resolve_source(raw: str) -> Path:
                 f"{raw} is a URL and URL fetching is off on this server.",
                 "Set MCP_FETCH_URLS=1 to allow it, or download the file and pass its path.",
             )
-        return fetch_url(raw)
+        try:
+            return fetch_url(raw)
+        except ValueError as exc:
+            # fetch_url raises ValueError for every download failure -- the
+            # SSRF guard, the size cap, a timeout, an HTTP error -- and no tool
+            # in either tier catches ValueError. They catch PathError. So a URL
+            # pointing at 169.254.169.254 did not produce the refusal the guard
+            # was written to give; it raised straight through the tool layer,
+            # out of a server whose contract is that every failure is a dict
+            # with an error and a hint. It went unnoticed because the read tier
+            # never reached this branch at all (see core/readers.resolve) and
+            # the edit tier is rarely handed a URL.
+            raise PathError(str(exc), _fetch_hint(str(exc))) from exc
     path = Path(raw).expanduser().resolve()
     if not path.exists():
         raise PathError(f"No file at {raw!r}.", "Check the path, or pass a URL if MCP_FETCH_URLS=1 is set.")
     if path.is_dir():
         raise PathError(f"{raw!r} is a directory, not a document.", "Pass the path of a single file.")
     return path
+
+
+def _fetch_hint(message: str) -> str:
+    """The recovery for THIS download failure, not one hint for all of them.
+
+    A single catch-all hint is wrong for every failure it was not written for,
+    which is this fleet's commonest defect shape. The three cases want three
+    different things from the caller, and only one of them is "try again".
+    """
+    lowered = message.lower()
+    if "non-public address" in lowered:
+        return (
+            "This server refuses to fetch loopback, private and cloud-metadata addresses. "
+            "Pass a publicly reachable URL, or download the file and pass its local path."
+        )
+    if "larger than" in lowered:
+        return "Raise MCP_MAX_FETCH_MB on the server, or download the file and pass its local path."
+    return "Check the URL opens in a browser and needs no login, or download the file and pass its local path."
 
 
 def require_pdf(path: Path, op: str) -> None:

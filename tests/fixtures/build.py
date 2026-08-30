@@ -305,6 +305,200 @@ def damaged(name: str = "damaged.pdf") -> Path:
     return path
 
 
+def clipped_table(name: str = "clipped_table.pdf") -> Path:
+    """An unruled table whose content runs past the grid pdfplumber infers.
+
+    `unruled_table.pdf` above proves the whitespace strategy gets the SHAPE
+    wrong, which this repo accepts and reports as low confidence. This one
+    proves something else: that it silently CUTS values.
+
+    pdfplumber's text strategy derives a bounding box from the text it sees and
+    then assigns characters to cells by position, discarding anything outside
+    that box. Where a line extends past it -- here the 20pt title, which is
+    wider than the body that set the box -- the cell comes back holding part of
+    a word: `Quarterly R` / `epor`, and a header cell reading `Revenu`.
+
+    That is not a guess about structure. It is a wrong value, and no confidence
+    score tells a caller that a character is missing. Found on a
+    LibreOffice-produced page where the cut fell inside a number and
+    `1450.50` was returned as `1450.` -- an answer that looks entirely normal.
+
+    The layout is deliberate and fragile in one direction only: the title must
+    be set larger than the body, because it is the title overhanging the
+    inferred box that does the cutting.
+    """
+    pdf = pikepdf.Pdf.new()
+    items = [
+        (57.0, 60.0, "Quarterly Report", 20.0),
+        (57.0, 100.0, "Revenue grew across", 12.0),
+        (57.0, 140.0, "Regional Detail", 16.0),
+        (57.0, 180.0, "APAC led growth;", 12.0),
+        (60.0, 220.0, "Region", 12.0),
+        (113.0, 220.0, "Units", 12.0),
+        (155.0, 220.0, "Revenue", 12.0),
+        (58.0, 250.0, "APAC", 12.0),
+        (112.0, 250.0, "120", 12.0),
+        (153.0, 250.0, "1450.50", 12.0),
+        (58.0, 280.0, "EMEA", 12.0),
+        (112.0, 280.0, "95", 12.0),
+        (153.0, 280.0, "1120.20", 12.0),
+        (58.0, 310.0, "AMER", 12.0),
+        (112.0, 310.0, "80", 12.0),
+        (153.0, 310.0, "990.75", 12.0),
+    ]
+    pdf.pages.append(_page(pdf, _text_ops(items)))
+    return _save(pdf, name)
+
+
+def kerned(name: str = "kerned.pdf") -> Path:
+    """A value drawn as a TJ array with kerning numbers between its digits.
+
+    Every fixture above draws text with `(...) Tj` -- one string, no kerning --
+    which is not what a word processor emits. Real producers set text with TJ,
+    an array of strings interleaved with kerning adjustments, and the numbers
+    are where redact() went wrong: pikepdf hands them back as Python ints, and
+    `bytes(3)` is three NUL bytes rather than the digit 3, so each kern spliced
+    NULs into the middle of the text being matched.
+
+    The kern inside the value is POSITIVE, and that is the whole point. A
+    negative kern makes `bytes(-30)` raise ValueError, which the old code
+    caught and turned into an empty string -- so a fixture kerned only the
+    usual way passes against the broken code and proves nothing. A positive one
+    splices thirty NULs into the middle of the number instead.
+
+    Both signs are ordinary. Measured across the corpus: 62 of 127 kerns in a
+    LibreOffice-produced PDF are positive, and 4,572 of 9,397 in a real
+    scanned-then-OCR'd invoice. This is not an exotic case; it is half of them.
+
+    So the pattern is `1450.50` and the array is `(1450) 30 (.50)`: a matcher
+    that keeps the kern sees `1450\\x00...\\x00.50` and finds nothing, while
+    pdfium extracts `1450.50` and the caller is told the redaction failed.
+    """
+    pdf = pikepdf.Pdf.new()
+    content = (
+        b"BT\n/F1 12 Tf 1 0 0 1 72.00 700.00 Tm "
+        b"[(Invoice total ) -25 (1450) 30 (.50) -25 ( due on receipt)] TJ\n"
+        b"1 0 0 1 72.00 680.00 Tm (Reference 1120.20 is a separate figure.) Tj\nET"
+    )
+    stream = pdf.make_stream(zlib.compress(content))
+    stream.Filter = pikepdf.Name.FlateDecode
+    font = pdf.make_indirect(
+        pikepdf.Dictionary(
+            Type=pikepdf.Name.Font,
+            Subtype=pikepdf.Name.Type1,
+            BaseFont=pikepdf.Name.Helvetica,
+            Encoding=pikepdf.Name.WinAnsiEncoding,
+        )
+    )
+    pdf.pages.append(
+        pikepdf.Page(
+            pdf.make_indirect(
+                pikepdf.Dictionary(
+                    Type=pikepdf.Name.Page,
+                    MediaBox=[0, 0, W, H],
+                    Resources=pikepdf.Dictionary(Font=pikepdf.Dictionary(F1=font)),
+                    Contents=pdf.make_indirect(stream),
+                )
+            )
+        )
+    )
+    return _save(pdf, name)
+
+
+# The text of the subset-font fixture. Carries a decimal number (the thing a
+# redaction is usually asked for), a word, and enough distinct characters to
+# make the glyph codes obviously not ASCII.
+SUBSET_TEXT = "Account 1450.50 balance"
+
+
+def subset_font(name: str = "subset_font.pdf") -> Path:
+    """Text addressed by GLYPH INDEX, decodable only through /ToUnicode.
+
+    Every other PDF fixture here stores its text as readable bytes, because
+    they are drawn in Helvetica. Almost nothing real does: LibreOffice, Word
+    and every modern producer embed a subset font and address it by glyph
+    index, so `1450.50` reaches a content-stream tool as b'\\x07\\n\\n\\x0e...'
+    and a byte-level match finds nothing.
+
+    That gap is invisible without this fixture. redact() passed every test in
+    this repo and could not redact a single document made by a word processor;
+    it was found by converting an HTML file to PDF through LibreOffice in the
+    container and trying, which is a thing no unit test does.
+
+    No font file is embedded -- a viewer substitutes one and pdfium extracts
+    through the /ToUnicode CMap, which is the property under test. Embedding a
+    real TrueType subset would add a binary blob and a dependency for no extra
+    coverage.
+    """
+    pdf = pikepdf.Pdf.new()
+    # Codes start at 1: 0 is .notdef in a real subset, and using it would make
+    # an unmapped code indistinguishable from a mapped one.
+    alphabet = sorted(set(SUBSET_TEXT))
+    code_of = {character: index + 1 for index, character in enumerate(alphabet)}
+
+    cmap = [
+        "/CIDInit/ProcSet findresource begin",
+        "12 dict begin",
+        "begincmap",
+        "/CMapName/Adobe-Identity-UCS def",
+        "/CMapType 2 def",
+        "1 begincodespacerange",
+        "<00> <FF>",
+        "endcodespacerange",
+        f"{len(alphabet)} beginbfchar",
+        *(f"<{code_of[c]:02X}> <{ord(c):04X}>" for c in alphabet),
+        "endbfchar",
+        "endcmap",
+        "CMapName currentdict /CMap defineresource pop",
+        "end",
+        "end",
+    ]
+    descriptor = pdf.make_indirect(
+        pikepdf.Dictionary(
+            Type=pikepdf.Name.FontDescriptor,
+            FontName=pikepdf.Name("/AAAAAA+SubsetTest"),
+            Flags=4,
+            FontBBox=[-100, -200, 1000, 900],
+            ItalicAngle=0,
+            Ascent=800,
+            Descent=-200,
+            CapHeight=700,
+            StemV=80,
+        )
+    )
+    font = pdf.make_indirect(
+        pikepdf.Dictionary(
+            Type=pikepdf.Name.Font,
+            Subtype=pikepdf.Name.TrueType,
+            BaseFont=pikepdf.Name("/AAAAAA+SubsetTest"),
+            FirstChar=1,
+            LastChar=len(alphabet),
+            Widths=[500] * len(alphabet),
+            FontDescriptor=descriptor,
+            ToUnicode=pdf.make_indirect(pdf.make_stream("\n".join(cmap).encode("latin-1"))),
+        )
+    )
+
+    encoded = bytes(code_of[c] for c in SUBSET_TEXT)
+    escaped = encoded.replace(b"\\", b"\\\\").replace(b"(", rb"\(").replace(b")", rb"\)")
+    content = b"BT\n/F1 14 Tf 1 0 0 1 72.00 700.00 Tm (" + escaped + b") Tj\nET"
+    stream = pdf.make_stream(zlib.compress(content))
+    stream.Filter = pikepdf.Name.FlateDecode
+    pdf.pages.append(
+        pikepdf.Page(
+            pdf.make_indirect(
+                pikepdf.Dictionary(
+                    Type=pikepdf.Name.Page,
+                    MediaBox=[0, 0, W, H],
+                    Resources=pikepdf.Dictionary(Font=pikepdf.Dictionary(F1=font)),
+                    Contents=pdf.make_indirect(stream),
+                )
+            )
+        )
+    )
+    return _save(pdf, name)
+
+
 BUILDERS = {
     "born_digital": born_digital,
     "two_column": two_column,
@@ -315,6 +509,9 @@ BUILDERS = {
     "hybrid": hybrid,
     "encrypted": encrypted,
     "damaged": damaged,
+    "clipped_table": clipped_table,
+    "kerned": kerned,
+    "subset_font": subset_font,
     "large": large,
 }
 

@@ -60,8 +60,19 @@ def _run(plumbed_page, settings: dict, basis: Basis) -> list[dict]:
         # pages still have answers -- so this degrades to "no tables here".
         return out
 
+    # Read the words once per page, not once per table, and only when there is
+    # a table to fill -- extract_words() costs about as much as find_tables()
+    # itself, and paying it on every page of a 500-page document that has no
+    # table on it made the suite six times slower.
+    if not tables:
+        return out
+    words = plumbed_page.extract_words() if basis == "whitespace" else []
+
     for table in tables:
-        rows = [[(cell or "").strip() for cell in row] for row in table.extract()]
+        if basis == "whitespace":
+            rows = _rows_from_words(table, words)
+        else:
+            rows = [[(cell or "").strip() for cell in row] for row in table.extract()]
         rows = [row for row in rows if any(cell for cell in row)]
         if not rows:
             continue
@@ -73,6 +84,47 @@ def _run(plumbed_page, settings: dict, basis: Basis) -> list[dict]:
             "confidence": CONFIDENCE[basis],
         }
         if basis == "whitespace":
-            entry["note"] = "column boundaries inferred from gaps; verify the shape before use"
+            entry["note"] = (
+                "column boundaries inferred from gaps; verify the shape before use. "
+                "Cell values are whole words, and content outside the inferred grid is not included."
+            )
         out.append(entry)
     return out
+
+
+def _rows_from_words(table, words: list[dict]) -> list[list[str]]:
+    """Fill each cell with the WHOLE words whose centre falls inside it.
+
+    pdfplumber's own `extract()` assigns characters by position and clips at
+    the table's bounding box, so a value that crosses the boundary comes back
+    cut in half. On a LibreOffice-produced page whose inferred table bbox ended
+    at x=185.6 while `1450.50` runs from 152.8 to 202.3, the cell read
+    `1450.` -- a number silently missing its last two digits, returned as a
+    successful extraction.
+
+    That is a different failure from the one this module already accepts. The
+    whitespace strategy's SHAPE is a guess and says so; a truncated value is
+    not a guess about structure, it is a wrong number, and no confidence score
+    warns a caller that the digits are missing.
+
+    The centre is the test rather than full containment, because a word that
+    straddles a boundary belongs to the column it mostly sits in, and requiring
+    containment would drop it entirely -- trading a cut value for a missing one.
+    """
+    rows: list[list[str]] = []
+    for row in table.rows:
+        cells: list[str] = []
+        for cell in row.cells:
+            if cell is None:
+                cells.append("")
+                continue
+            x0, top, x1, bottom = cell
+            inside = [
+                word
+                for word in words
+                if x0 <= (word["x0"] + word["x1"]) / 2 <= x1 and top <= (word["top"] + word["bottom"]) / 2 <= bottom
+            ]
+            inside.sort(key=lambda word: word["x0"])
+            cells.append(" ".join(word["text"] for word in inside).strip())
+        rows.append(cells)
+    return rows

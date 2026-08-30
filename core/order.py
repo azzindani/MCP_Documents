@@ -334,6 +334,16 @@ def lines_with_size(blocks: list[Block], tolerance: float = 2.0) -> list[tuple[s
     """
     if not blocks:
         return []
+    # The guard lines_from_blocks carries, which this twin was missing. A
+    # format with no geometry gives every block y=0.0, so the tolerance test
+    # below collapsed an ENTIRE page onto one line: to_markdown of an HTML file
+    # with two headings and a table came back as one run-together paragraph
+    # reporting `headings: 0` and success: true, while outline() of the same
+    # file listed both headings correctly. Where there are no coordinates the
+    # reader's order IS the reading order, so one block is one line.
+    if not any(b.bbox for b in blocks):
+        return [_line_of([block]) for block in blocks]
+
     out: list[tuple[str, float]] = []
     current: list[Block] = []
     last_y: float | None = None

@@ -121,6 +121,35 @@ def capability(doc: Document, name: str):
     return getattr(reader_for(doc.source), name, None)
 
 
+def resolve(source: str) -> str:
+    """The local path behind a `source`, downloading a URL where that is on.
+
+    This is the choke point that makes "everything is fetchable" true for the
+    docs-read tier. It used to be true only for docs-edit, which resolves paths
+    itself -- so `convert(source=<url>)` worked and `probe(source=<url>)` did
+    not, while every reader's own not-found error ended "or pass a URL if
+    MCP_FETCH_URLS=1 is set". The hint named a capability the tier did not
+    have, which is worse than no hint: a caller who followed it got the same
+    error again.
+
+    A choke point rather than a line in each of the seven read tools, for the
+    same reason sanitize_responses and measure_responses are applied to the
+    whole server: the eighth tool cannot forget it. It is also what puts the
+    SSRF guard in shared/exchange.py in front of the read tier at all -- an
+    authenticated caller must not be able to turn this server into a probe of
+    the network it is deployed on.
+    """
+    from core.paths import PathError, resolve_source
+
+    try:
+        return str(resolve_source(source))
+    except PathError as exc:
+        # Translated, because every tool above catches ReaderError and none
+        # catches PathError -- an untranslated one would leave the read tier
+        # raising through the tool layer instead of answering.
+        raise ReaderError(str(exc), exc.hint) from exc
+
+
 def open_source(source: str, password: str = "") -> Document:
     """Open a document, from cache when the file has not changed since.
 
@@ -129,13 +158,14 @@ def open_source(source: str, password: str = "") -> Document:
     That matters more here than in most caches: the two tiers share a
     filesystem by design.
     """
-    key = cache.key_for(source, password)
+    path = resolve(source)
+    key = cache.key_for(path, password)
     cached = cache.get(key)
     if cached is not None:
         return cached
 
-    module = reader_for(source)
-    doc = module.open_document(source, password)
+    module = reader_for(path)
+    doc = module.open_document(path, password)
     cache.put(key, doc, module.close_document)
     return doc
 
