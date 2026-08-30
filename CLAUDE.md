@@ -519,29 +519,33 @@ of the server modules' AST and fails if one never appears in the smoke script.
       `docs/TECH_STACK.md`, `docs/DECISIONS.md`
 - [x] `.python-version`, `.gitattributes`, `pyproject.toml`
 
-### Phase 1 — Scaffolding
-- [ ] `shared/` copied verbatim from a sibling repo (do not retype)
-- [ ] `uv sync` clean on 3.14
-- [ ] `unified_server.py` mounting two empty tiers, `/health` answering
+### Phase 1 — Scaffolding  ✅
+- [x] `shared/` copied from siblings (see §13 rule 13 for which are common)
+- [x] `uv sync` clean on 3.14 — every pin has a cp314 or pure-Python wheel
+- [x] `unified_server.py` mounting both tiers, `/health` answering
 - [ ] Dockerfile, docker-compose, CI (`ci.yml`, `release.yml`), e2e job
 
-### Phase 2 — The IR and readers
-- [ ] `core/ir.py`
-- [ ] `readers/pdf.py` (pypdfium2 + pdfplumber), then `html.py`, `ooxml.py`,
-      `email.py`, `epub.py`, `text.py`
-- [ ] Fixture corpus per §12 — build this **before** the tools that read it
+### Phase 2 — The IR and readers  ✅ (PDF)
+- [x] `core/ir.py`, `core/cache.py`, `core/paths.py`, `core/binaries.py`
+- [x] `readers/pdf.py` (pypdfium2 + pdfplumber)
+- [ ] `html.py`, `ooxml.py`, `email.py`, `epub.py`, `text.py`
+- [x] Fixture corpus per §12, built **before** the tools that read it, plus
+      `tests/fixtures/real.py` pointing at real documents (never copied)
 
-### Phase 3 — `docs-read`
-- [ ] `probe` → `outline` → `find` → `extract` → `extract_tables` →
-      `read_page` → `to_markdown`
-- [ ] `core/clean.py`, `core/order.py`, `core/tables.py`, `core/budget.py`
+### Phase 3 — `docs-read`  ✅
+- [x] `probe` · `outline` · `find` · `extract` · `extract_tables` ·
+      `read_page` · `to_markdown`
+- [x] `core/clean.py`, `core/order.py`, `core/tables.py`, `core/budget.py`
 
-### Phase 4 — `docs-edit`
-- [ ] `assemble` (grammar first, with its parser tested alone)
-- [ ] `convert`, `optimize`, `ocr`, `protect`
-- [ ] `redact` **last**, with its verification step, or not at all
+### Phase 4 — `docs-edit`  ✅
+- [x] `assemble` — the grammar, with the parse echoed back
+- [x] `convert` · `optimize` · `ocr` · `protect`
+- [x] `redact` **last**, with its verification step
+- [ ] `convert(to='pdf')` is written but untested here — needs LibreOffice
+- [ ] `optimize` image downsampling — needs a Ghostscript decision (AGPL)
 
 ### Phase 5 — Deployment
-- [ ] Bearer auth, OAuth bridge, `exchange.py` wiring
-- [ ] `remote_smoke_test.sh` + coverage guard
+- [ ] Dockerfile carrying LibreOffice + Tesseract, and a memory limit decision
+- [ ] Bearer auth and OAuth bridge wired end to end (code is in place)
+- [ ] `remote_smoke_test.sh` + the coverage guard
 - [ ] Live deployment behind the reverse proxy
