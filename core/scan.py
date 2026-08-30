@@ -100,20 +100,24 @@ def finditer_bounded(
     is the failure this repo keeps finding.
     """
     seconds = budget.regex_seconds() if timeout is None else timeout
-    # forkserver on Linux, spawn on Windows and macOS: both pickle the args, so
-    # neither inherits a lock held by another thread of this server. Named
-    # explicitly rather than left to the default, because the default has
-    # changed once already (3.14 moved Linux off `fork`) and a guard that
-    # depends on it silently becomes unsafe.
-    # Written as a branch on two literals rather than one computed argument:
-    # `get_context` is overloaded per method name, and passing an expression
-    # collapses it to the base class, which does not declare `.Process`.
-    if "forkserver" in mp.get_all_start_methods():
-        ctx = mp.get_context("forkserver")
-    else:
-        ctx = mp.get_context("spawn")
+    # The platform DEFAULT start method, deliberately: forkserver on Linux
+    # since 3.14, spawn on macOS and Windows. All three pickle their arguments,
+    # so none of them inherits a lock another thread of this server is holding
+    # -- which plain `fork` does, and which is why CPython moved the Linux
+    # default off it.
+    #
+    # Naming "forkserver" explicitly type-checked here and failed pyright on
+    # the Windows runner, where it is not a valid start method at all, so the
+    # overload collapses to the base class and `.Process` is unknown. The
+    # no-argument call is the one spelling that resolves on every platform.
+    ctx = mp.get_context()
+    process_type = ctx.Process
+    if ctx.get_start_method() == "fork":
+        # Unreachable today; here because a default that has changed once can
+        # change again, and this guard silently stops being safe if it does.
+        process_type = mp.get_context("spawn").Process
     parent, child = ctx.Pipe(duplex=False)
-    process = ctx.Process(target=_scan, args=(source, flags, texts, ceiling, child), daemon=True)
+    process = process_type(target=_scan, args=(source, flags, texts, ceiling, child), daemon=True)
     process.start()
     child.close()  # only the child writes; the parent's copy must go or poll() never ends
     try:
