@@ -142,7 +142,31 @@ def running_heads(pages: int = 6, name: str = "running_heads.pdf") -> Path:
             (72.0, 48.0, "CONFIDENTIAL - Acme Corporation - Internal Use Only", 9.0),
             (72.0, 744.0, f"Acme Annual Report 2026    Page {n} of {pages}", 9.0),
         ]
-        items += [(72.0, 120.0 + i * 16, f"Body sentence {i + 1} on page {n}.", 11.0) for i in range(28)]
+        # Body text deliberately NOT templated on the page number. The first
+        # version read "Body sentence {i} on page {n}", which after the
+        # cleaner blanks digit runs has the identical shape on every page --
+        # so the body was indistinguishable from a running footer, and a
+        # fixture built to test header stripping instead proved that body text
+        # could be stripped. A fixture must not share the property it exists
+        # to isolate.
+        words = [
+            "quarterly",
+            "revenue",
+            "segment",
+            "margin",
+            "outlook",
+            "supply",
+            "hedging",
+            "capital",
+            "goodwill",
+            "covenant",
+            "dividend",
+            "buyback",
+        ]
+        items += [
+            (72.0, 120.0 + i * 16, f"The {words[(i + n) % len(words)]} position was reviewed by the board.", 11.0)
+            for i in range(28)
+        ]
         pdf.pages.append(_page(pdf, _text_ops(items)))
     return _save(pdf, name)
 

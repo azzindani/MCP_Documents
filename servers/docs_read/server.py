@@ -74,6 +74,49 @@ def probe(source: str, password: str = "") -> dict:
     return engine.probe(source, password)
 
 
+@mcp.tool(annotations=READS)
+def outline(source: str, password: str = "") -> dict:
+    """List headings and bookmarks with page anchors. Use before extract."""
+    return engine.outline(source, password)
+
+
+@mcp.tool(annotations=READS)
+def find(
+    source: str,
+    query: str,
+    regex: bool = False,
+    pages: str = "",
+    max_hits: int = 50,
+    password: str = "",
+) -> dict:
+    """Locate text across a document. Returns page locations, not content."""
+    return engine.find(source, query, regex, pages, max_hits, password)
+
+
+@mcp.tool(annotations=READS)
+def extract(source: str, pages: str = "", clean_text: bool = True, password: str = "") -> dict:
+    """Extract clean text for a page range. Bounded; refuses when too big."""
+    return engine.extract(source, pages, clean_text, password)
+
+
+@mcp.tool(annotations=READS)
+def extract_tables(source: str, pages: str = "", min_confidence: float = 0.0, password: str = "") -> dict:
+    """Extract tables as rows. Says whether ruling lines or gaps were used."""
+    return engine.extract_tables(source, pages, min_confidence, password)
+
+
+@mcp.tool(annotations=READS)
+def read_page(source: str, page: int, password: str = "") -> dict:
+    """Read one page: text, tables, links, and how each was obtained."""
+    return engine.read_page(source, page, password)
+
+
+@mcp.tool(annotations=READS)
+def to_markdown(source: str, pages: str = "", password: str = "") -> dict:
+    """Convert a document to markdown. Refuses when over the token budget."""
+    return engine.to_markdown(source, pages, password)
+
+
 # Applied to the whole server rather than per tool, deliberately. Both of these
 # were fixed once at a call site in a sibling repo and stopped at that one
 # site: json_safe existed for a year while every other tool kept emitting bare
