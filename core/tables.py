@@ -76,7 +76,13 @@ def _run(plumbed_page, settings: dict, basis: Basis) -> list[dict]:
     # cell edge whichever strategy found the cell, so a value that overhangs
     # its own rule is cut. High confidence made it worse, not better: 0.95 on a
     # word missing its last letter.
-    words = plumbed_page.extract_words()
+    # Through the same ungluing the text path uses. A table cell is where a
+    # glued figure does the most damage: `259.358.79331` in a cell is a number
+    # a caller reads straight into a model, with none of the surrounding prose
+    # that would make it look wrong.
+    from core.readers.pdf import _unglue
+
+    words = _unglue(plumbed_page, plumbed_page.extract_words())
 
     for table in tables:
         rows = _rows_from_words(table, words)

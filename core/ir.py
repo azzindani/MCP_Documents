@@ -119,9 +119,33 @@ class Page:
     # looked sets it True.
     has_content: bool = False
 
+    # The page's text AS THE READER READ IT, before this module turned it into
+    # blocks. Set by the reader; never rebuilt from `blocks`.
+    #
+    # It exists because `text` below is not a property of the page, it is a
+    # property of whichever reader last touched it. `load_page` builds one block
+    # per LINE, so joining with "\n" reproduces the page. `load_page_words`
+    # builds one block per WORD and REPLACES the cached page, so the same join
+    # yields one word per line and every space in the document becomes a
+    # newline. `find` searched that, and a two-word query stopped matching on
+    # any page another tool had already read:
+    #
+    #     find('JUMLAH EKUITAS')                      -> 5 hits
+    #     extract(pages='7'); find('JUMLAH EKUITAS')  -> 3 hits
+    #
+    # Same document, same call, fewer answers, no warning -- and the pages that
+    # vanish are the ones the caller just looked at, on the documented
+    # probe -> find -> extract path.
+    raw_text: str = ""
+
     @property
     def text(self) -> str:
-        return "\n".join(b.text for b in self.blocks)
+        """The page's text. Prefers what the reader read over what was built.
+
+        Falls back to the blocks for readers with no separate text layer of
+        their own, where the blocks ARE the reading.
+        """
+        return self.raw_text or "\n".join(b.text for b in self.blocks)
 
     @property
     def char_count(self) -> int:
