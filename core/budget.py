@@ -128,6 +128,39 @@ def pages_that_fit(total_chars: int, page_count: int) -> int:
     return max(1, min(page_count, fits))
 
 
+def max_source_bytes() -> int:
+    """Ceiling on a file a FLOW reader will parse in one pass.
+
+    PDF does not need this: pypdfium2 opens a 500-page file without reading it,
+    and pages arrive as they are asked for. HTML, docx, epub and email have no
+    such seam -- the parser builds a tree of the whole document or nothing --
+    so the peak memory is a property of the file, not of the request, and the
+    only place to refuse is before opening it.
+
+    lxml holds a parsed tree at roughly 5-10x the source bytes, so 64 MiB of
+    HTML is most of a 1 GiB container before a single tool has run.
+    """
+    return int(os.environ.get("DOCS_MAX_SOURCE_BYTES", str(16 * 1024 * 1024 if constrained() else 64 * 1024 * 1024)))
+
+
+def flow_chars_per_page() -> int:
+    """Characters in one synthetic page of a format that has no pages.
+
+    HTML, Markdown, email and text have no page boundaries, but `find` reports
+    page numbers, `extract` takes page ranges and every budget here counts in
+    pages -- so a flow format needs a page, and the only question is how big.
+
+    2,800 characters, because that is what a real page holds. Measured over 103
+    born-digital pages sampled from 25 documents across the corpus: median
+    2,822, mean 2,713, p25 1,819, p75 3,631. Picking a round number like 2,000
+    or 5,000 would have made `pages_that_fit` and `token_estimate_full` mean
+    something different for an HTML file than for the PDF it was converted
+    from, which is exactly the kind of quiet disagreement between two answers
+    this repo exists to avoid.
+    """
+    return int(os.environ.get("DOCS_FLOW_CHARS_PER_PAGE", "2800"))
+
+
 def max_table_pages() -> int:
     """Pages one extract_tables call may scan.
 

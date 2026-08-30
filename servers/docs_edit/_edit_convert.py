@@ -7,9 +7,11 @@ flattening them into one word.
                 problem, high fidelity, and the reason a PDF site's "Word to
                 PDF" is boring.
 
-    FROM pdf    to txt, md, html, images -- this repo's own reader and cleaner.
-                Also high fidelity: these are lossy targets and the loss is the
-                point.
+    FROM any    to txt, md, html -- this repo's own readers and cleaner, so
+                every format core/readers handles is a valid source. Lossy
+                targets, and the loss is the point.
+                `images` is the exception and still needs a PDF: it goes
+                through PDFium, and an email has nothing to rasterise.
 
     FROM pdf    to docx, xlsx, pptx -- RECONSTRUCTION from glyphs at
                 coordinates. Not implemented here, and refused with the reason
@@ -59,9 +61,12 @@ TO_PDF_INPUTS = {
     ".csv",
 }
 
-FROM_PDF_TARGETS = {"txt", "md", "html", "images"}
+# Targets produced by reading the source and writing it out again. Every one
+# of these works for every format core/readers can read -- except `images`,
+# which rasterises and so still needs a PDF.
+TEXT_TARGETS = {"txt", "md", "html", "images"}
 RECONSTRUCTION_TARGETS = {"docx", "xlsx", "pptx"}
-TARGETS = FROM_PDF_TARGETS | RECONSTRUCTION_TARGETS | {"pdf"}
+TARGETS = TEXT_TARGETS | RECONSTRUCTION_TARGETS | {"pdf"}
 
 # LibreOffice's first run initialises a profile and is far slower than the
 # rest. A timeout below that turns a working conversion into a mystery.
@@ -87,16 +92,35 @@ def convert(source: str, to: str, out: str = "") -> dict:
 
     if target == "pdf":
         return _to_pdf(src, out, progress)
-    if src.suffix.lower() != ".pdf":
-        return fail(
-            OP,
-            f"Converting {src.suffix or 'that'} to {target} is not supported.",
-            "Only PDF can be converted to txt, md, html or images. Use to='pdf' first.",
-            progress,
-        )
     if target in RECONSTRUCTION_TARGETS:
         return _refuse_reconstruction(src, target, progress)
-    return _from_pdf(src, target, out, progress)
+
+    # Rendering is the one direction that still needs a PDF: it goes through
+    # PDFium, and there is nothing to rasterise in an email or a CSV.
+    if target == "images" and src.suffix.lower() != ".pdf":
+        return fail(
+            OP,
+            f"Rendering {src.suffix or 'that'} to images is not supported.",
+            f"Run convert(source='{src.name}', to='pdf') first, then convert(to='images') on the result.",
+            progress,
+        )
+
+    # Everything else goes through the reader layer, so it works for every
+    # format that layer can read -- not only PDF. This used to refuse anything
+    # but a PDF outright, which was a leftover from when `pdf` was the only
+    # reader; `to_markdown` of an HTML file or a docx is exactly the kind of
+    # thing this tool is for, and it needed no new code, only the removal of a
+    # check that had stopped being true.
+    from core.readers import READERS
+
+    if src.suffix.lower() not in READERS:
+        return fail(
+            OP,
+            f"There is no reader for {src.suffix or 'a file with no extension'}, so it cannot become {target}.",
+            f"Readers available: {', '.join(sorted(READERS))}. Use convert(to='pdf') first for anything else.",
+            progress,
+        )
+    return _from_source(src, target, out, progress)
 
 
 def _to_pdf(src: Path, out: str, progress: list[dict]) -> dict:
@@ -172,7 +196,14 @@ def _to_pdf(src: Path, out: str, progress: list[dict]) -> dict:
     )
 
 
-def _from_pdf(src: Path, target: str, out: str, progress: list[dict]) -> dict:
+def _from_source(src: Path, target: str, out: str, progress: list[dict]) -> dict:
+    """Any readable format -> txt, md or html, through the reader layer.
+
+    Named `_from_pdf` when PDF was the only reader. It never contained
+    anything PDF-specific: it calls the docs-read tools, which route by
+    extension, so the whole of this works for HTML, Word, slides, email and
+    epub the moment those readers exist.
+    """
     from servers.docs_read import engine as read_engine
 
     if target == "images":

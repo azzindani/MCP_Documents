@@ -17,8 +17,7 @@ import re
 
 from core import budget
 from core.formatter import fail, ok
-from core.readers import UnsupportedFormat, load_page, open_source
-from core.readers.pdf import PdfError
+from core.readers import ReaderError, load_page, open_source
 from core.selection import SelectionError, format_pages, parse_pages
 from shared.progress import info, warn
 
@@ -55,7 +54,7 @@ def find(
     try:
         doc = open_source(source, password)
         wanted = parse_pages(pages, doc.page_count)
-    except (PdfError, UnsupportedFormat) as exc:
+    except ReaderError as exc:
         return fail(OP, str(exc), exc.hint, progress)
     except SelectionError as exc:
         return fail(OP, str(exc), exc.hint, progress)

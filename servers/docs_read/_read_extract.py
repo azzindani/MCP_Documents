@@ -14,8 +14,7 @@ from __future__ import annotations
 
 from core import budget, clean, order
 from core.formatter import fail, ok, refuse
-from core.readers import UnsupportedFormat, load_page, load_page_words, open_source
-from core.readers.pdf import PdfError
+from core.readers import ReaderError, load_page, load_page_words, open_source, page_tables
 from core.selection import SelectionError, format_pages, parse_pages
 from shared.progress import info, warn
 
@@ -32,7 +31,7 @@ def extract(
     try:
         doc = open_source(source, password)
         wanted = parse_pages(pages, doc.page_count)
-    except (PdfError, UnsupportedFormat) as exc:
+    except ReaderError as exc:
         return fail(op, str(exc), exc.hint, progress)
     except SelectionError as exc:
         return fail(op, str(exc), exc.hint, progress)
@@ -111,7 +110,7 @@ def extract_tables(
     try:
         doc = open_source(source, password)
         wanted = parse_pages(pages, doc.page_count)
-    except (PdfError, UnsupportedFormat) as exc:
+    except ReaderError as exc:
         return fail(op, str(exc), exc.hint, progress)
     except SelectionError as exc:
         return fail(op, str(exc), exc.hint, progress)
@@ -131,14 +130,7 @@ def extract_tables(
             progress=progress,
         )
 
-    import pdfplumber
-
-    from core import tables as table_engine
-
-    found: list[dict] = []
-    with pdfplumber.open(doc.source, password=doc.password) as plumbed:
-        for number in wanted:
-            found.extend(table_engine.extract_page_tables(plumbed.pages[number - 1]))
+    found = page_tables(doc, wanted)
 
     kept = [t for t in found if t["confidence"] >= min_confidence]
     progress.append(info(f"scanned {len(wanted)} page(s), found {len(found)} table(s)"))

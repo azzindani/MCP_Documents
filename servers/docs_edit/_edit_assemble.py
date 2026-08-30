@@ -30,7 +30,7 @@ from pathlib import Path
 import pikepdf
 
 from core.formatter import fail, ok
-from core.paths import PathError, finish, resolve_out, resolve_source
+from core.paths import PathError, finish, require_pdf, resolve_out, resolve_source
 from core.selection import SelectionError, parse_ordered
 from shared.progress import info
 
@@ -123,7 +123,9 @@ def assemble(sources: list[str], select: str, out: str) -> dict:
     counts: dict[str, int] = {}
     try:
         for source in sources:
-            path = str(resolve_source(source))
+            found = resolve_source(source)
+            require_pdf(found, "assemble")
+            path = str(found)
             with pikepdf.open(path) as handle:
                 counts[path] = len(handle.pages)
             resolved.append(path)

@@ -249,9 +249,18 @@ def order_blocks(page: Page, columns: int | None = None) -> list[Block]:
     if not positioned:
         return list(page.blocks)
 
+    # Blocks with no geometry on a page where others HAVE it are kept, at the
+    # end, in the reader's order. Returning only the positioned ones dropped
+    # them silently: a slide's speaker notes carry no box on the slide, so
+    # every note in a deck vanished from read_page and extract while the tool
+    # reported success. Nothing can sort them against a coordinate, but "we do
+    # not know where this goes" is not a reason to lose it.
+    unpositioned = [b for b in page.blocks if not b.bbox]
+
     count = columns if columns is not None else detect_columns(page)
     if count <= 1:
         ordered = sorted(positioned, key=lambda b: (round(b.bbox[1], 1), b.bbox[0]))  # type: ignore[index]
+        ordered.extend(unpositioned)
         for i, block in enumerate(ordered):
             block.order, block.column = i, 0
         return ordered
@@ -280,6 +289,10 @@ def order_blocks(page: Page, columns: int | None = None) -> list[Block]:
             block.column = index
             block.order = len(ordered)
             ordered.append(block)
+    for block in unpositioned:
+        block.column = count - 1
+        block.order = len(ordered)
+        ordered.append(block)
     return ordered
 
 

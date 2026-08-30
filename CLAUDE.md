@@ -141,7 +141,29 @@ Span` model in `core/ir.py`, and every tool operates on that.
 
 This is the decision that keeps the tool count at 13. Supporting a new format
 costs *one reader*, not five tools. PDF, HTML, docx/xlsx/pptx, .eml/.msg, .epub,
-.rtf/.odt, plain text and markdown all enter the same way.
+plain text, markdown and CSV all enter the same way.
+
+**The claim has to be enforced, not just stated.** It was untrue for two of the
+tools until the second reader existed: `_read_probe.py` imported
+`core.readers.pdf` directly and `_read_page.py` / `_read_extract.py` imported
+pdfplumber, so `probe`, `outline`, `read_page` and `extract_tables` — the entry
+points every workflow starts with — would have run PDF machinery over an HTML
+file. **Nothing above `core/readers/` may import a reader module by name, or a
+format's library.** Ask the router; where the question does not apply to a
+format, it answers empty.
+
+**Pages are real or synthetic, and the response always says which.** PDF, slides,
+worksheets and epub spine items have boundaries the file declares
+(`pagination: "native"`). HTML, Word, email, markdown and text are a flow with
+no pages, so pages are made at `budget.flow_chars_per_page()` and reported as
+`pagination: "synthetic"` alongside `chars_per_page`. A caller told "page 7 of
+12" for a web page, who then finds no such division in the source, has been
+misled about the one thing this server exists to be careful with.
+
+A native page too large to read is divided anyway, and the document then reports
+`synthetic` — see the note in `core/readers/office_xlsx.py`. A page that cannot
+be extracted, whose refusal names a range that cannot be narrowed, is worse than
+no tool.
 
 ### 4.3 No tool ever returns a document
 
@@ -525,10 +547,17 @@ of the server modules' AST and fails if one never appears in the smoke script.
 - [x] `unified_server.py` mounting both tiers, `/health` answering
 - [ ] Dockerfile, docker-compose, CI (`ci.yml`, `release.yml`), e2e job
 
-### Phase 2 — The IR and readers  ✅ (PDF)
+### Phase 2 — The IR and readers  ✅
 - [x] `core/ir.py`, `core/cache.py`, `core/paths.py`, `core/binaries.py`
 - [x] `readers/pdf.py` (pypdfium2 + pdfplumber)
-- [ ] `html.py`, `ooxml.py`, `email.py`, `epub.py`, `text.py`
+- [x] `html.py`, `text.py` (txt/md/csv/log), `office_docx.py`, `office_pptx.py`,
+      `office_xlsx.py`, `eml.py`, `epub.py` — 16 extensions, no new tool
+- [x] `core/readers/_flow.py` — synthetic pagination for formats with no pages,
+      at 2,800 chars (measured: median of 103 real pages across 25 documents)
+- [x] Reader protocol: `open_document` / `close_document` / `load_page` /
+      `load_page_words` required; `ruled_pages` / `page_tables` / `bookmarks` /
+      `probe_extras` optional, answered empty by the router where a format has
+      no such question. Every reader raises `ReaderError`, caught once.
 - [x] Fixture corpus per §12, built **before** the tools that read it, plus
       `tests/fixtures/real.py` pointing at real documents (never copied)
 

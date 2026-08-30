@@ -30,18 +30,20 @@ from pathlib import Path
 import pypdfium2 as pdfium
 
 from core.ir import MIN_CHARS_FOR_TEXT_LAYER, Basis, Block, Document, Page, Span
+from core.readers import ReaderError
 
 # pdfplumber is imported lazily inside the functions that need geometry: it
 # pulls pdfminer.six, which is pure Python and slow to import, and the common
 # path (probe, find, extract on a born-digital file) never touches it.
 
 
-class PdfError(Exception):
-    """Raised with a hint the tool layer can hand straight to the caller."""
+class PdfError(ReaderError):
+    """Raised with a hint the tool layer can hand straight to the caller.
 
-    def __init__(self, message: str, hint: str) -> None:
-        super().__init__(message)
-        self.hint = hint
+    A subclass rather than its own type, so the tool layer catches ReaderError
+    once instead of a tuple that every new reader has to be added to -- and is
+    silently absent from until someone hits its error path in production.
+    """
 
 
 def open_document(path: str, password: str = "") -> Document:
@@ -208,3 +210,56 @@ def ruled_pages(doc: Document, numbers: list[int]) -> set[int]:
             if raw.lines or raw.rects or raw.edges:
                 found.add(number)
     return found
+
+
+def page_tables(doc: Document, numbers: list[int]) -> list[dict]:
+    """Tables on these pages, as rows, each carrying how it was found.
+
+    Lives in the reader rather than in the tools that want it, because "how do
+    you find a table" is the single most format-dependent question here. A PDF
+    has no tables -- it has ruling lines and column gaps that a table can be
+    inferred from, at `ruled` or `whitespace` confidence. An HTML file or a
+    docx has real `<table>` markup, which is `native` and needs none of this
+    machinery. Both tools that read tables previously imported pdfplumber
+    directly and would have run it against an HTML file.
+
+    Takes a LIST for the same reason as ruled_pages: opening pdfplumber is the
+    expensive part, not reading a page out of it.
+    """
+    import pdfplumber
+
+    from core import tables as table_engine
+
+    found: list[dict] = []
+    with pdfplumber.open(doc.source, password=doc.password) as plumbed:
+        for number in numbers:
+            found.extend(table_engine.extract_page_tables(plumbed.pages[number - 1]))
+    return found
+
+
+def bookmarks(doc: Document) -> list[dict]:
+    """The PDF's own outline, when it has one. Most real documents do not.
+
+    Measured across the corpus, four of five carried no bookmarks at all -- two
+    government regulations, a 68-page contract and a CFR volume all have an
+    empty outline -- so the caller's fallback path is the common case.
+    """
+    handle = doc.handle
+    if handle is None:
+        return []
+    out: list[dict] = []
+    for item in handle.get_toc():
+        page_index = item.page_index
+        out.append(
+            {
+                "level": int(item.level) + 1,
+                "title": (item.title or "").strip(),
+                # page_index is 0-based and may be None for a bookmark whose
+                # destination is not a page; every page number a caller sees
+                # elsewhere here is 1-based, so converting at the boundary
+                # keeps outline's output usable in extract(pages=...).
+                "page": (page_index + 1) if page_index is not None else None,
+                "basis": "tagged",
+            }
+        )
+    return out

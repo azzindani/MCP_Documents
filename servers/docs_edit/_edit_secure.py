@@ -20,7 +20,7 @@ import re
 import pikepdf
 
 from core.formatter import fail, ok
-from core.paths import PathError, finish, resolve_out, resolve_source
+from core.paths import PathError, finish, require_pdf, resolve_out, resolve_source
 from core.selection import SelectionError, format_pages, parse_pages
 from shared.progress import info, warn
 from shared.progress import ok as ok_step
@@ -49,6 +49,7 @@ def protect(source: str, action: str, password: str = "", out: str = "") -> dict
 
     try:
         src = resolve_source(source)
+        require_pdf(src, op)
         destination = resolve_out(out, src)
     except PathError as exc:
         return fail(op, str(exc), exc.hint, progress)
@@ -140,6 +141,7 @@ def redact(source: str, pattern: str, pages: str = "", regex: bool = False, out:
 
     try:
         src = resolve_source(source)
+        require_pdf(src, op)
         destination = resolve_out(out, src)
     except PathError as exc:
         return fail(op, str(exc), exc.hint, progress)

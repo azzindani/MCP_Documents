@@ -24,8 +24,16 @@ from __future__ import annotations
 
 from core import budget
 from core.formatter import fail, ok
-from core.ir import Document
-from core.readers import pdf as pdf_reader
+from core.ir import Document, as_basis
+from core.readers import (
+    ReaderError,
+    bookmarks,
+    capability,
+    load_page,
+    load_page_words,
+    open_source,
+    ruled_pages,
+)
 from core.selection import format_pages
 from shared.progress import info, warn
 
@@ -55,14 +63,17 @@ def probe(source: str, password: str = "") -> dict:
     """Identify a document: format, pages, scanned or digital, what it holds."""
     progress = []
     try:
-        doc = pdf_reader.open_document(source, password)
-    except pdf_reader.PdfError as exc:
+        doc = open_source(source, password)
+    except ReaderError as exc:
         return fail(OP, str(exc), exc.hint, progress)
 
-    try:
-        return _describe(doc, progress)
-    finally:
-        pdf_reader.close_document(doc)
+    # Deliberately NOT closed here. `open_source` puts the document in the LRU
+    # in core/cache.py, which owns closing it on eviction -- and the intended
+    # probe -> find -> extract sequence depends on the next call finding it
+    # still open. Closing it here left a CLOSED document in the cache, so the
+    # following tool got a handle that raised on first use; every read tool
+    # apart from this one already relied on the cache.
+    return _describe(doc, progress)
 
 
 def _describe(doc: Document, progress: list[dict]) -> dict:
@@ -72,7 +83,7 @@ def _describe(doc: Document, progress: list[dict]) -> dict:
     total_chars = 0
 
     for number in range(1, doc.page_count + 1):
-        page = pdf_reader.load_page(doc, number)
+        page = load_page(doc, number)
         total_chars += page.char_count
         if page.char_count == 0:
             empty.append(number)
@@ -84,13 +95,20 @@ def _describe(doc: Document, progress: list[dict]) -> dict:
     progress.append(info(f"read the text layer of {doc.page_count} pages"))
 
     sample = _sample(doc.page_count)
-    ruled = len(pdf_reader.ruled_pages(doc, sample))
+    # Empty for every format whose tables are real markup rather than ink. The
+    # router answers that rather than each reader stubbing it, and the response
+    # omits the whole `tables` section instead of reporting zero -- "0 pages
+    # with ruling lines" for an HTML file reads as "no tables here", which is
+    # a different and wrong claim.
+    ruled = len(ruled_pages(doc, sample))
+    has_ruling = capability(doc, "ruled_pages") is not None
     sampled_all = len(sample) == doc.page_count
-    progress.append(
-        info(f"checked {len(sample)} of {doc.page_count} pages for ruling lines")
-        if not sampled_all
-        else info("checked every page for ruling lines")
-    )
+    if has_ruling:
+        progress.append(
+            info(f"checked {len(sample)} of {doc.page_count} pages for ruling lines")
+            if not sampled_all
+            else info("checked every page for ruling lines")
+        )
 
     tokens_full = budget.estimate_tokens("x" * total_chars)
     fits = budget.pages_that_fit(total_chars, doc.page_count)
@@ -110,7 +128,15 @@ def _describe(doc: Document, progress: list[dict]) -> dict:
         "pages": doc.page_count,
         "bytes": doc.meta.get("bytes", 0),
         "encrypted": doc.encrypted,
-        "page_size": [round(first.width, 1), round(first.height, 1)] if first else None,
+        # None, not [0.0, 0.0], for a format with no geometry. A page size of
+        # zero is a measurement that reads as real; None says there is nothing
+        # to measure, which for HTML or an email body is the truth.
+        "page_size": [round(first.width, 1), round(first.height, 1)] if first and first.width else None,
+        # Whether the page numbers in every other response mean anything in the
+        # file itself. "synthetic" for the flow formats -- HTML, text, Word,
+        # email -- where this server divided a continuous document into pages
+        # of its own choosing, and says how big it made them.
+        "pagination": doc.meta.get("pagination", "native"),
         "page_kinds": {
             "born_digital": len(digital),
             "scanned": len(scanned) - len(empty),
@@ -122,15 +148,26 @@ def _describe(doc: Document, progress: list[dict]) -> dict:
         "scanned_pages": format_pages(scanned),
         "digital_pages": format_pages(digital),
         "extractable": extractable,
-        "tables": {
-            "pages_with_ruling_lines": ruled,
-            "sampled_pages": len(sample),
-            "sample_is_every_page": sampled_all,
-        },
         # The number that tells a caller why they must not ask for it all.
         "token_estimate_full": tokens_full,
         "pages_that_fit_one_response": fits,
     }
+    if result["pagination"] == "synthetic":
+        result["chars_per_page"] = doc.meta.get("chars_per_page")
+    if has_ruling:
+        result["tables"] = {
+            "pages_with_ruling_lines": ruled,
+            "sampled_pages": len(sample),
+            "sample_is_every_page": sampled_all,
+        }
+
+    # Whatever this format knows about itself that the others do not: a web
+    # page's title and link count, a workbook's sheet names, a message's
+    # sender. Kept behind a capability so the shared result stays the same
+    # shape for every format and the extras are visibly extras.
+    extras = capability(doc, "probe_extras")
+    if extras:
+        result["format_details"] = extras(doc)
     return ok(OP, result, progress, basis="text_layer" if digital else "empty")
 
 
@@ -144,56 +181,42 @@ def outline(source: str, password: str = "") -> dict:
     op = "outline"
     progress: list[dict] = []
     try:
-        doc = pdf_reader.open_document(source, password)
-    except pdf_reader.PdfError as exc:
+        doc = open_source(source, password)
+    except ReaderError as exc:
         return fail(op, str(exc), exc.hint, progress)
 
-    try:
-        entries = _bookmarks(doc)
-        if entries:
-            progress.append(info(f"{len(entries)} bookmark(s) from the document's own outline"))
-            return ok(op, {"entries": entries, "count": len(entries)}, progress, basis="tagged")
-
-        # Most real documents have no bookmarks. Measured across the corpus,
-        # four of five did not -- two government regulations, a 68-page
-        # contract and a CFR volume all have an empty outline -- so the
-        # inferred path is the common case, not the exception, and it has to
-        # say that it is inferred.
-        progress.append(info("no bookmarks; inferring headings from type size"))
-        entries = _inferred(doc, progress)
-        if not entries:
-            return ok(
-                op,
-                {"entries": [], "count": 0},
-                progress,
-                basis="empty",
-                hint="No bookmarks and no headings stand out by size. Use find() to navigate instead.",
-            )
-        return ok(op, {"entries": entries, "count": len(entries)}, progress, basis="font_size")
-    finally:
-        pdf_reader.close_document(doc)
-
-
-def _bookmarks(doc) -> list[dict]:
-    handle = doc.handle
-    if handle is None:
-        return []
-    out: list[dict] = []
-    for item in handle.get_toc():
-        page_index = item.page_index
-        out.append(
-            {
-                "level": int(item.level) + 1,
-                "title": (item.title or "").strip(),
-                # page_index is 0-based and may be None for a bookmark whose
-                # destination is not a page; every page number a caller sees
-                # elsewhere here is 1-based, so converting at the boundary
-                # keeps outline's output usable in extract(pages=...).
-                "page": (page_index + 1) if page_index is not None else None,
-                "basis": "tagged",
-            }
+    entries = bookmarks(doc)
+    if entries:
+        progress.append(info(f"{len(entries)} heading(s) the document declares itself"))
+        # The response basis comes from the ENTRIES, not from a constant. A
+        # PDF's bookmarks are `tagged`; HTML, Markdown, Word, slides and epub
+        # headings are `native`, which is a stronger claim, and reporting every
+        # one of them as `tagged` would misname where the answer came from for
+        # five formats out of six.
+        found = {str(entry.get("basis", "tagged")) for entry in entries}
+        return ok(
+            op,
+            {"entries": entries, "count": len(entries)},
+            progress,
+            basis=as_basis(found.pop(), "tagged") if len(found) == 1 else "tagged",
         )
-    return out
+
+    # Most real PDFs have no bookmarks. Measured across the corpus, four of
+    # five did not -- two government regulations, a 68-page contract and a CFR
+    # volume all have an empty outline -- so the inferred path is the common
+    # case for that format, not the exception, and it has to say it is
+    # inferred. The formats that declare their headings never reach here.
+    progress.append(info("no declared headings; inferring from type size"))
+    entries = _inferred(doc, progress)
+    if not entries:
+        return ok(
+            op,
+            {"entries": [], "count": 0},
+            progress,
+            basis="empty",
+            hint="No bookmarks and no headings stand out by size. Use find() to navigate instead.",
+        )
+    return ok(op, {"entries": entries, "count": len(entries)}, progress, basis="font_size")
 
 
 # Pages sampled when inferring headings. Reading every page of an 843-page
@@ -212,7 +235,7 @@ def _inferred(doc, progress: list[dict]) -> list[dict]:
 
     sized: list[tuple[int, str, float]] = []
     for number in numbers:
-        page = pdf_reader.load_page_words(doc, number)
+        page = load_page_words(doc, number)
         blocks = order.order_blocks(page, order.detect_columns(page))
         for text, size in order.lines_with_size(blocks):
             if text.strip():

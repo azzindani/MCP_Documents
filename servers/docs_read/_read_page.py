@@ -14,8 +14,7 @@ from __future__ import annotations
 
 from core import budget, clean, order
 from core.formatter import fail, ok, refuse
-from core.readers import UnsupportedFormat, load_page_words, open_source
-from core.readers.pdf import PdfError
+from core.readers import ReaderError, load_page_words, open_source, page_tables
 from core.selection import SelectionError, format_pages, parse_pages
 from shared.progress import info, warn
 
@@ -26,7 +25,7 @@ def read_page(source: str, page: int, password: str = "") -> dict:
     progress: list[dict] = []
     try:
         doc = open_source(source, password)
-    except (PdfError, UnsupportedFormat) as exc:
+    except ReaderError as exc:
         return fail(op, str(exc), exc.hint, progress)
 
     if page < 1 or page > doc.page_count:
@@ -46,12 +45,11 @@ def read_page(source: str, page: int, password: str = "") -> dict:
     # ruled table inside a page of prose does not move the gutter statistics at
     # all, and read_page is the "go and look" tool -- missing a table on the
     # page it was asked to show would defeat the point of calling it.
-    import pdfplumber
-
-    from core import tables as table_engine
-
-    with pdfplumber.open(doc.source, password=doc.password) as plumbed:
-        tables = table_engine.extract_page_tables(plumbed.pages[page - 1])
+    #
+    # Through the reader, not through pdfplumber. This imported pdfplumber
+    # directly, so read_page on an HTML file would have run pdfminer over
+    # markup; each format now answers with the tables it actually has.
+    tables = page_tables(doc, [page])
 
     progress.append(info(f"read page {page} of {doc.page_count}"))
     if loaded.is_scanned:
@@ -60,7 +58,9 @@ def read_page(source: str, page: int, password: str = "") -> dict:
     result = {
         "page": page,
         "of": doc.page_count,
-        "size": [round(loaded.width, 1), round(loaded.height, 1)],
+        # None rather than [0.0, 0.0] for a format with no geometry -- a
+        # zero page size reads as a measurement, and there is none to make.
+        "size": [round(loaded.width, 1), round(loaded.height, 1)] if loaded.width else None,
         "rotation": loaded.rotation,
         "columns": columns,
         "looks_tabular": tabular,
@@ -78,7 +78,7 @@ def to_markdown(source: str, pages: str = "", password: str = "") -> dict:
     try:
         doc = open_source(source, password)
         wanted = parse_pages(pages, doc.page_count)
-    except (PdfError, UnsupportedFormat) as exc:
+    except ReaderError as exc:
         return fail(op, str(exc), exc.hint, progress)
     except SelectionError as exc:
         return fail(op, str(exc), exc.hint, progress)
