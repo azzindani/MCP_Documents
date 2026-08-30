@@ -87,7 +87,7 @@ Three consequences to design around, not discover:
   saw only a closed socket. Either raise the limit for this service or refuse
   oversized conversions with the size named.
 - **Render at a pixel budget, not a page count.** A 300 DPI A4 page is ~25 MB as
-  RGB; 300 pages is ~7 GB. `engine/budget.py` computes bytes from
+  RGB; 300 pages is ~7 GB. `core/budget.py` computes bytes from
   `width × height × dpi² × 3` and refuses with the DPI that would fit.
 - **`docker inspect -f '{{.RestartCount}}'`** is how you find out a tool was
   OOM-killed rather than "slow".
@@ -121,13 +121,22 @@ dependencies = [
     "pypdfium2>=4.30,<5.0",
     "pdfplumber>=0.11,<1.0",
     "pikepdf>=9.0,<10.0",
-    "lxml>=5.0,<6.0",
+    # 6.1 floor is a Python 3.14 constraint, not an API one: 5.4.0 is the last
+    # 5.x and ships no cp314 wheel, so uv builds from source and dies on
+    # missing libxml2 headers. Checking a package's LATEST version for a 3.14
+    # wheel proves nothing about the version your pin actually selects.
+    "lxml>=6.1,<7.0",
     "python-docx>=1.1,<2.0",
     "openpyxl>=3.1,<4.0",
     "python-pptx>=1.0,<2.0",
     "charset-normalizer>=3.3,<4.0",
 ]
 ```
+
+**Every pin above was checked against 3.14 wheels at the version the pin
+selects, not at the package's latest version.** `pikepdf 9.11.0`, `lxml 6.1.2`
+and `charset-normalizer 3.5.1` ship `cp314`; the rest are pure-Python wheels.
+Nothing in this stack needs a compiler.
 
 **Lock without `--upgrade`.** A sibling repo took a mystery `TypeError` in
 production when scipy 1.18 changed what a string distribution name resolves to;

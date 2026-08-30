@@ -59,7 +59,7 @@ MCP_Documents/
 │       ├── _edit_convert.py     ← convert()
 │       ├── _edit_optimize.py    ← optimize(), ocr()
 │       └── _edit_secure.py      ← protect(), redact()
-├── engine/
+├── core/
 │   ├── __init__.py              ← thin router, re-exports every tool function
 │   ├── ir.py                    ← the Document / Page / Block / Span model
 │   ├── readers/                 ← one module per input format, all -> ir
@@ -70,9 +70,11 @@ MCP_Documents/
 │   ├── budget.py                ← token, page, pixel and time budgets
 │   ├── cache.py                 ← in-process LRU keyed on (path, mtime, size)
 │   └── formatter.py             ← structured JSON output builder
-├── shared/                      ← COPIED VERBATIM from the fleet, never forked
-│   ├── deploy_auth.py  oauth_bridge.py  exchange.py
-│   ├── platform_utils.py  progress.py
+├── shared/                      ← copied from the fleet; see §13 rule 13
+│   ├── oauth_bridge.py  exchange.py  json_safe.py   ← never fork these
+│   ├── token_estimate.py  tool_annotations.py       ← never fork these
+│   ├── deploy_auth.py                               ← copied from a multi-tier sibling
+│   ├── platform_utils.py  progress.py               ← per-repo by design
 ├── unified_server.py            ← mounts both tiers on one port
 ├── tests/
 ├── install/
@@ -82,7 +84,7 @@ MCP_Documents/
 ```
 
 **File size hard limits (STANDARDS.md §15):** `server.py` 80–120 lines (300 hard);
-every other module 100–300 lines (1,000 hard). `engine/__init__.py` is a router
+every other module 100–300 lines (1,000 hard). `core/__init__.py` is a router
 only, 30–50 lines.
 
 ---
@@ -129,13 +131,13 @@ split is a property of user interfaces, not of the operation.
 ### 4.1 Engine / server split (STANDARDS.md §14)
 
 `servers/*/server.py` contains zero domain logic; every `@mcp.tool()` body is one
-line. `engine/` contains zero MCP imports.
+line. `core/` contains zero MCP imports.
 
 ### 4.2 One intermediate representation, many readers
 
 **A tool must never ask what format it was given.** Every reader in
-`engine/readers/` normalises its input into the same `Document → Page → Block →
-Span` model in `engine/ir.py`, and every tool operates on that.
+`core/readers/` normalises its input into the same `Document → Page → Block →
+Span` model in `core/ir.py`, and every tool operates on that.
 
 This is the decision that keeps the tool count at 13. Supporting a new format
 costs *one reader*, not five tools. PDF, HTML, docx/xlsx/pptx, .eml/.msg, .epub,
@@ -177,7 +179,7 @@ products. Build the second.
 No index build step, no background jobs, no vector store, no persisted state —
 the same character as the rest of the fleet.
 
-**The one exception is `engine/cache.py`:** an in-process LRU keyed on
+**The one exception is `core/cache.py`:** an in-process LRU keyed on
 `(path, mtime, size)`. `probe` → `find` → `extract` on a 300-page file otherwise
 parses it three times, which is the difference between 0.5s and 30s. It persists
 nothing, is invisible to the caller, and adds no tool. Do not grow it into an
@@ -191,7 +193,7 @@ path, which is opt-in and off by default.
 
 ### 4.7 Budgets are part of the contract
 
-Three limits are real and must be enforced in `engine/budget.py`, each with a
+Three limits are real and must be enforced in `core/budget.py`, each with a
 refusal that names the limit and the way to stay inside it:
 
 | Budget | Why | Behaviour at the limit |
@@ -238,7 +240,7 @@ type, never a bare dict.
 
 ## 6. Sub-Module Design
 
-### 6.1 `engine/ir.py`
+### 6.1 `core/ir.py`
 
 ```
 Document(source, format, pages[], meta)
@@ -251,7 +253,7 @@ Everything downstream reads this. A reader that cannot supply `bbox` (plain
 text, email bodies) supplies `None` and the layout-dependent tools say so rather
 than inventing coordinates.
 
-### 6.2 `engine/clean.py`
+### 6.2 `core/clean.py`
 
 The difference between 300 usable pages and 300 pages of noise. In order:
 
@@ -266,14 +268,14 @@ The difference between 300 usable pages and 300 pages of noise. In order:
 Every step is individually disableable and every step reports what it changed. A
 cleaner that silently edits text is indistinguishable from a corrupt extraction.
 
-### 6.3 `engine/order.py`
+### 6.3 `core/order.py`
 
 Reading order and column detection. **Getting a two-column layout wrong makes
 every sentence interleave with the wrong one**, which is the single commonest way
 PDF text is silently garbage. Column count is detected, reported in the response,
 and never assumed to be 1.
 
-### 6.4 `engine/tables.py`
+### 6.4 `core/tables.py`
 
 Two paths, and the response always says which ran:
 
@@ -412,7 +414,7 @@ flat list of 240 tools that a model chooses from.
 
 ## 12. Testing Standards (STANDARDS.md §27)
 
-Tests import `engine` directly — never spin up an MCP process.
+Tests import `engine` router directly — never spin up an MCP process.
 
 Required per tool: happy path, malformed input, budget refusal, constrained
 mode, `token_estimate` present, and **for every extraction tool, a `basis` that
@@ -430,7 +432,7 @@ one-page PDF exercises any of them:
 - a **500-page** document, for the budgets — the budgets are untestable without it
 - the same content as **HTML, .docx and .eml**, to prove the readers agree
 
-Coverage: `shared/` 100%, `engine/` 90%, servers 90%.
+Coverage: `shared/` 100%, `core/` 90%, servers 90%.
 CI on `ubuntu-22.04`, `macos-latest`, `windows-latest`, `fail-fast: false`.
 
 `remote_smoke_test.sh` exercises a running server over HTTP, run in CI against a
@@ -476,15 +478,33 @@ of the server modules' AST and fails if one never appears in the smoke script.
 7. **Never assume single-column** reading order. Detect and report it.
 8. **Never load a whole document to answer a bounded question.** Readers are
    page-lazy; `find` streams.
-9. **Never persist state.** The LRU in `engine/cache.py` is memory-only and must
+9. **Never persist state.** The LRU in `core/cache.py` is memory-only and must
    not grow into an index. No `.mcp_versions/`, no receipt log — except where a
    `docs-edit` tool overwrites a file, which follows the fleet's snapshot rule.
 10. **Never print to stdout** — `logging` to stderr only.
 11. **Never hardcode a numeric limit** — `shared/platform_utils.py` and
-    `engine/budget.py`.
+    `core/budget.py`.
 12. **Never import MCP outside `servers/*/server.py`.**
-13. **Never fork `shared/`.** Those files are byte-identical across the fleet;
-    a fix belongs in all seven or in none.
+13. **Never fork the fleet-common half of `shared/`.** `oauth_bridge.py`,
+    `exchange.py`, `json_safe.py`, `token_estimate.py` and `tool_annotations.py`
+    are common: a fix belongs in all seven or in none.
+
+    Measured across the six siblings rather than assumed, because the fleet's
+    own notes overstate it:
+    - `oauth_bridge.py` — five repos byte-identical, File_System differs by **77
+      lines of pure line-wrapping** and nothing else, because it lints at
+      `line-length = 100` and the rest at 120. Functionally one file.
+    - `exchange.py` — four identical; File_System's differs deliberately (its
+      `path` is a destination, so URL fetching lives in a `download` op).
+    - `deploy_auth.py` — **genuinely six versions**, 60 to 137 lines. Copy from a
+      *multi-tier* sibling (Data_Analyst / ML / Office), because this repo has
+      tiers and the single-server copies do not thread a per-tier `base_url`.
+    - `platform_utils.py` and `progress.py` — **per-repo by design**; the limit
+      helpers are domain nouns (`get_max_rows`, `get_max_lag`). Do not unify
+      them, and do not import another repo's.
+
+    When porting a fix into the common five, `diff` before assuming a repo is
+    behind: a 77-line diff that is entirely reflow is not a missing fix.
 14. **Never put a hostname, domain or token in this file or any doc in this
     repo.** These are shipped to third-party model providers on every harness
     session. Use `DOCS_PUBLIC_URL` and friends.
@@ -506,7 +526,7 @@ of the server modules' AST and fails if one never appears in the smoke script.
 - [ ] Dockerfile, docker-compose, CI (`ci.yml`, `release.yml`), e2e job
 
 ### Phase 2 — The IR and readers
-- [ ] `engine/ir.py`
+- [ ] `core/ir.py`
 - [ ] `readers/pdf.py` (pypdfium2 + pdfplumber), then `html.py`, `ooxml.py`,
       `email.py`, `epub.py`, `text.py`
 - [ ] Fixture corpus per §12 — build this **before** the tools that read it
@@ -514,7 +534,7 @@ of the server modules' AST and fails if one never appears in the smoke script.
 ### Phase 3 — `docs-read`
 - [ ] `probe` → `outline` → `find` → `extract` → `extract_tables` →
       `read_page` → `to_markdown`
-- [ ] `engine/clean.py`, `engine/order.py`, `engine/tables.py`, `engine/budget.py`
+- [ ] `core/clean.py`, `core/order.py`, `core/tables.py`, `core/budget.py`
 
 ### Phase 4 — `docs-edit`
 - [ ] `assemble` (grammar first, with its parser tested alone)

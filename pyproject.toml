@@ -14,7 +14,13 @@ dependencies = [
     "pikepdf>=9.0,<10.0",
     # Other formats. One reader per format, all normalising into engine/ir.py,
     # which is what keeps the tool count at 13 -- see docs/ARCHITECTURE.md §3.
-    "lxml>=5.0,<6.0",
+    #
+    # lxml floor is 6.1, not 5.x, and that is a Python 3.14 constraint rather
+    # than an API one: 5.4.0 is the newest 5.x and it ships no cp314 wheel, so
+    # uv falls back to building from source and dies on missing libxml2/libxslt
+    # headers. The general trap -- checking a package's LATEST version for a
+    # 3.14 wheel proves nothing about the version your pin actually selects.
+    "lxml>=6.1,<7.0",
     "python-docx>=1.1,<2.0",
     "openpyxl>=3.1,<4.0",
     "python-pptx>=1.0,<2.0",
@@ -33,8 +39,12 @@ dependencies = [
 # when a transitive scipy bump changed what a string argument resolves to; the
 # pin was right and the lock refresh was not.
 
-[tool.uv]
-dev-dependencies = [
+# PEP 735 dependency groups, not [tool.uv] dev-dependencies. The six sibling
+# repos all use the [tool.uv] form and uv now warns that it "is deprecated and
+# will be removed in a future release" -- so the fleet has a small migration
+# waiting for it. A new repo should not start inside the deprecation.
+[dependency-groups]
+dev = [
     "pytest>=8.0,<9.0",
     "pyright>=1.1,<2.0",
     "ruff>=0.9,<1.0",
@@ -47,6 +57,15 @@ target-version = "py314"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP"]
 ignore = ["E402"]
+
+# shared/ is copied from the fleet and five of its files must stay byte-identical
+# across seven repos. Running the formatter over them forks them silently -- and
+# that is not hypothetical: MCP_File_System lints at line-length 100, so its copy
+# of oauth_bridge.py differs from the other five by 77 lines of pure reflow and
+# nothing else. Anyone diffing the two now has to read all 77 to learn that no
+# fix is missing. Lint them (a real error is a real error); never rewrite them.
+[tool.ruff.format]
+exclude = ["shared/**"]
 
 # Note for anyone adding type-checking config: a pyrightconfig.json OVERRIDES
 # this table. Three sibling repos have one, and a stale pythonVersion in it cost

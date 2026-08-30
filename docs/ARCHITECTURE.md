@@ -48,7 +48,7 @@ descriptions — 80 characters per tool is the entire contract the model reads.
                      └─ readers/text.py
                               │
                               v
-                      engine/ir.py
+                       core/ir.py
               Document → Page → Block → Span
                               │
         ┌─────────────────────┼─────────────────────┐
