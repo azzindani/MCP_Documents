@@ -2,7 +2,11 @@ __pycache__/
 *.py[cod]
 *.pyo
 .venv/
+# `.env` alone matches only that exact name. A `.env.local`, a `.env.bak` or a
+# `.env.prod` is the same file with the same secrets in it, and one of those
+# reached a commit here via `git add -A` before this line existed.
 .env
+.env.*
 *.egg-info/
 dist/
 build/
