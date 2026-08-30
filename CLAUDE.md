@@ -585,7 +585,8 @@ of the server modules' AST and fails if one never appears in the smoke script.
       that its envelope patterns are escaped-JSON aware
 - [x] Port block moved to 8850-8859; 8816 was already `DATA_WORKSPACE_PORT`
       (DECISIONS §13)
-- [ ] Live deployment behind the reverse proxy
+- [x] Live deployment behind the reverse proxy, registered in all eight
+      harnesses and connected to this repo's own Claude Code session
 
 **Six defects were found by writing the smoke test, and none by the 145 tests
 that already passed.** Each has a regression test named after the wrong answer:
@@ -602,3 +603,23 @@ that already passed.** Each has a regression test named after the wrong answer:
 The shape they share: every one returned `success: true` (or a refusal blaming
 the document) while being wrong, and every one needed a REAL document — one
 LibreOffice made, one Tesseract read — to show up at all.
+
+### Phase 6 — Sweep
+
+The build is complete; what remains is finding what it still gets wrong. Ledger
+in `Harnesses/scripts/sweep/LEDGER_docs_r1.md`, one round per tier.
+
+- [x] Round 1 — the **read** tier, 7 tools, against `/root/Evals` mounted at
+      `/corpus`. Four more defects, and again none from the 216 tests that
+      passed at the time:
+
+| what it did | where |
+|---|---|
+| `page_kinds.scanned` was 0 for every scan, beside a non-empty `scanned_pages` | `_read_probe.py` |
+| a budget refusal named a page range that its own estimator then refused | `_read_extract.py` |
+| `IndexError` out of five tools on 12 of 170 documents — text outside the MediaBox | `core/order.py` |
+| the **ruled** table path truncated cells too, at 0.95 confidence | `core/tables.py` |
+
+- [ ] Round 2 — the **edit** tier: `assemble`, `convert`, `optimize`, `ocr`,
+      `protect`, `redact`, plus the `basis` honesty audit across all formats.
+      Phases 8–13 and 15 of the ledger, carried over unfinished.
