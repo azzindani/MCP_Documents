@@ -190,3 +190,78 @@ documents hide.
 
 The budgets in particular are untestable without a genuinely large document, so
 the 500-page fixture is not optional.
+
+---
+
+## 11. The image ships without Ghostscript, and says what that costs
+
+Decision 6 left this open; Phase 5 closed it. **Ghostscript is not installed**
+in the container, so `optimize(action='compress')` does object-stream and
+stream compression through QPDF and does **not** downsample images — a scanned
+document compresses very little here.
+
+The licence is AGPL-3.0, whose §13 reaches users who interact with a program
+over a network, and a network endpoint is exactly what this deployment is.
+Invoking it as a separate process is a defensible boundary, but shipping an
+image that bundles it makes the distribution question live, and that is not a
+question to answer by inheritance.
+
+The cost is stated rather than hidden: `core/binaries.py` detects the absence
+at call time and the response carries a `note_images` saying image downsampling
+is unavailable. The tool never claims a compression it did not perform.
+
+An operator who accepts AGPL for their own deployment builds with
+`--build-arg INSTALL_GHOSTSCRIPT=1`. No code changes, because the binary is
+looked up at call time rather than at import.
+
+---
+
+## 12. The container gets 2 GiB, from measurement
+
+Read from the container's own cgroup (`memory.peak`), not estimated:
+
+| what was running | peak |
+|---|---|
+| at rest, both sub-servers loaded | 75 MiB |
+| the whole smoke test, all 13 tools | 291 MiB |
+| render + OCR + LibreOffice + probe, concurrent | 574 MiB |
+| three concurrent `convert(to='images')` | 649 MiB |
+
+Rendering dominates, and it is the one allocation bounded by a budget rather
+than by the document: PDFium returns an RGBA buffer capped at
+`DOCS_MAX_RENDER_BYTES` (256 MiB unconstrained) and PIL then holds its own copy
+plus the PNG encoder's. LibreOffice and Tesseract are subprocesses sharing the
+same cgroup, which is why the mixed case costs nearly as much as three renders.
+
+**Rejected 1 GiB** — it leaves ~375 MiB over the worst measured case, and the
+failure mode is not a refusal. The OOM killer takes the process, both
+sub-servers go down together, and the caller sees a closed socket that is
+indistinguishable from a network fault. A sibling repo lost twelve tools at
+once that way.
+
+---
+
+## 13. This repo's port block is 8850-8859
+
+`DOCS_READ_PORT` defaulted to 8816, which `DATA_WORKSPACE_PORT` already had.
+Two servers defaulting to one socket: whichever bound second died with
+EADDRINUSE, and the quieter failure is a client configured for 8816 that
+reaches the other server's tool list.
+
+Allocated by hand across the fleet, so it is written down: 8765 math, 8801
+filesystem, 8810-8816 data, 8820-8822 machine learning, 8830-8840 office,
+8850-8859 documents. The unified server is 8850; `docs-read` is 8851 and
+`docs-edit` 8852 for standalone runs.
+
+---
+
+## 14. The smoke test has no default DOMAIN
+
+The six sibling repos hard-code the deployment hostname in
+`remote_smoke_test.sh`. This one requires `DOMAIN` and defaults to nothing,
+because CLAUDE.md §13 rule 14 says no hostname or domain appears anywhere in
+this tree — these files are shipped to third-party model providers on every
+harness session, and a public repo is a public repo.
+
+The cost is one environment variable on every manual run. The alternative was
+inheriting a disclosure decision instead of making one.

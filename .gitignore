@@ -14,6 +14,9 @@ tokens.json
 # OAuth 2.0 bridge state (issued access/refresh tokens) — see oauth_bridge.py
 oauth-state/
 
+# The compose stack's default MCP_SHARED_DIR — everything the tools produce.
+shared-files/
+
 # Document fixtures are built by tests/fixtures/build.py, not committed: the
 # 500-page budget fixture is large, and a real-world corpus must never be
 # committed to a public repo. The builder is the artifact; its output is not.
