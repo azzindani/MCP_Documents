@@ -265,3 +265,64 @@ harness session, and a public repo is a public repo.
 
 The cost is one environment variable on every manual run. The alternative was
 inheriting a disclosure decision instead of making one.
+
+---
+
+## 15. A zip is a container; an XBRL is a document
+
+Both were added when it became obvious that a financial filing does not arrive
+as a file. Every IDX filing in the corpus ships four: a PDF, a workbook, a
+taxonomy zip and an instance zip — and the one carrying the numbers in
+machine-readable form is inside an archive. This server has no shell, so
+"unpack it first" is not advice a caller can act on.
+
+Neither cost a tool, which is the whole point of `core/ir.py`. They take
+different shapes because they are different things.
+
+**XBRL gets a reader, and answers `native`.** It is the only format here whose
+figures are not reconstructed. Everything else recovers numbers from layout and
+reports a basis to match; a filer writes
+`<Assets contextRef="CurrentYearInstant">1640830566000000</Assets>` into a
+machine-readable field. Facts come back as `fact | context | unit | value |
+decimals`, because a bare `634224104000000` means nothing until you know it is
+savings deposits, at a date, in rupiah, held by third parties. Values are
+reported exactly as filed and **never rescaled**: an instance states full units
+where the PDF beside it prints millions, and converting would produce a figure
+matching neither document.
+
+It uses the **stdlib** XML parser rather than lxml. lxml earns its place in the
+HTML reader because real pages are not well-formed and it recovers the way a
+browser does. An XBRL instance is machine-generated and well-formed by
+definition, so the recovery buys nothing and the import costs a pyright stub
+failure on three runners.
+
+**A zip does NOT get pages.** Mapping members onto pages would make every
+existing tool appear to work on an archive, and every one of them would be
+lying in the response's own vocabulary: `extract(pages='3-5')` returning three
+filenames as text, `page_size: null` for a thing that has no pages. So an
+archive opens as its manifest — the one thing a zip really contains — and a
+member is named:
+
+```
+probe("filing.zip")                    what is inside, and how to open it
+probe("filing.zip::instance.xbrl")     the member, read as an XBRL
+```
+
+The `::` selector is resolved in `core/paths.py::resolve_source`, the choke
+point **both tiers** share, because putting URL fetching in the read tier alone
+is exactly how `convert(source=<url>)` worked while `probe(source=<url>)` did
+not (§ that defect is why the choke point exists). It counts only when the
+prefix ends `.zip`: `http://[::1]/report.pdf` contains a bare `::`, and
+splitting on it would route an SSRF probe past the guard written to refuse it.
+
+`.docx`, `.xlsx`, `.pptx` and `.epub` are zips too and are deliberately not
+reachable this way. They have readers of their own, and reaching inside one
+would present `word/document.xml` as though reading it were supported.
+
+**The bomb guard is a size, not a ratio.** Measured rather than reasoned about:
+real XBRL archives in the corpus compress **6.9x to 31x**, because XML is
+repetitive and packs extremely well. The intuitive "anything over 10x is a
+bomb" rejects every genuine filing. A bomb is not distinguished by being
+compressible, it is distinguished by expanding to more bytes than anyone could
+want — so the absolute expanded total is the guard, and the ratio is a second
+tripwire at 200x, far above anything real.
