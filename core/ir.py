@@ -16,7 +16,7 @@ and the layout-dependent tools say so rather than inventing numbers.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 # How a piece of content was obtained. This travels with the content all the
 # way to the response, because a PDF is glyphs at coordinates -- paragraphs,
@@ -73,6 +73,16 @@ class Block:
     order: int = 0  # reading-order index within the page, set by core.order
     column: int = 0  # 0-based column index, set by core.order
     basis: Basis = "text_layer"
+
+    # Cell rows, for a `table` block in a format that DECLARES its tables --
+    # an HTML <table>, a docx w:tbl, a worksheet. None for a PDF, whose tables
+    # are not declared but reconstructed from ruling lines or column gaps by
+    # core/tables.py, which reports a confidence alongside them.
+    #
+    # A real field rather than a side table keyed on id(block): CPython reuses
+    # an id as soon as the object is collected, so a lookup keyed that way
+    # silently returns another block's rows once the first is freed.
+    rows: list[list[str]] | None = None
 
     @property
     def text(self) -> str:
@@ -154,6 +164,21 @@ class Document:
     @property
     def loaded_pages(self) -> list[Page]:
         return [self.pages[n] for n in sorted(self.pages)]
+
+
+_BASES: frozenset[str] = frozenset(get_args(Basis))
+
+
+def as_basis(value: str, fallback: Basis = "text_layer") -> Basis:
+    """Narrow a runtime string to a Basis, falling back rather than raising.
+
+    A real check, not a cast to quiet the type checker: `basis` values arrive
+    from reader modules and travel into responses, and a reader with a typo
+    would otherwise put an unknown word in a field whose whole purpose is that
+    a caller can rely on its vocabulary. The fallback is the conservative
+    answer, never the confident one.
+    """
+    return value if value in _BASES else fallback  # type: ignore[return-value]
 
 
 def pages_of_kind(doc: Document, scanned: bool) -> list[int]:

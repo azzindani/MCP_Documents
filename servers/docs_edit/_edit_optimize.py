@@ -25,7 +25,7 @@ import pikepdf
 
 from core import binaries, budget
 from core.formatter import fail, ok, refuse
-from core.paths import PathError, finish, resolve_out, resolve_source
+from core.paths import PathError, finish, require_pdf, resolve_out, resolve_source
 from core.selection import SelectionError, format_pages, parse_pages
 from shared.progress import info
 from shared.progress import ok as ok_step
@@ -42,6 +42,7 @@ def optimize(source: str, action: str = "compress", out: str = "") -> dict:
 
     try:
         src = resolve_source(source)
+        require_pdf(src, op)
         destination = resolve_out(out, src)
     except PathError as exc:
         return fail(op, str(exc), exc.hint, progress)
@@ -133,16 +134,17 @@ def ocr(source: str, pages: str = "", language: str = "eng", out: str = "") -> d
 
     try:
         src = resolve_source(source)
+        require_pdf(src, op)
         destination = resolve_out(out, src)
     except PathError as exc:
         return fail(op, str(exc), exc.hint, progress)
 
-    from core.readers import load_page, open_source
+    from core.readers import ReaderError, load_page, open_source
 
     try:
         doc = open_source(str(src))
         wanted = parse_pages(pages, doc.page_count)
-    except SelectionError as exc:
+    except (SelectionError, ReaderError) as exc:
         return fail(op, str(exc), exc.hint, progress)
 
     # An empty `pages` means "the pages that actually need it", not "all of

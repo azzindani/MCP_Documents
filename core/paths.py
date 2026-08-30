@@ -50,6 +50,28 @@ def resolve_source(raw: str) -> Path:
     return path
 
 
+def require_pdf(path: Path, op: str) -> None:
+    """Refuse a non-PDF to a tool that only works on PDFs, by name.
+
+    The docs-read tier is format-agnostic; most of docs-edit is not, and cannot
+    be. Rotating a page, embedding an OCR layer and setting an owner password
+    are operations on the PDF file format itself, not on "a document" -- there
+    is no docx equivalent of linearisation.
+
+    Checked here rather than left to the library, because the library's failure
+    is unhelpful and sometimes silent: pikepdf on an HTML file says "not a PDF"
+    with no suggestion, and the OCR path opened the file through the reader
+    layer first, where an HTML file opens FINE and then reports every page as
+    already having a text layer -- a confident, wrong, successful answer.
+    """
+    if path.suffix.lower() != ".pdf":
+        raise PathError(
+            f"{op}() works on PDFs, and {path.name} is {path.suffix or 'a file with no extension'}.",
+            f"Run convert(source='{path.name}', to='pdf') first, then {op}() on the result. "
+            "The docs-read tools read this format directly.",
+        )
+
+
 def resolve_out(raw: str, source: Path | None = None, suffix: str = ".pdf") -> Path:
     """A writable output path, defaulting into MCP_OUTPUT_DIR.
 
