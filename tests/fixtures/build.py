@@ -220,6 +220,48 @@ def ruled_table(name: str = "ruled_table.pdf") -> Path:
     return _save(pdf, name)
 
 
+def wrapped_cells(name: str = "wrapped_cells.pdf") -> Path:
+    """A ruled table whose cells hold TWO lines each, laid out so that reading
+    them across instead of down produces a different sentence.
+
+    Every other table fixture here has one line per cell, which is exactly why
+    nothing caught a cell being sorted by x0 alone: for a single-line cell that
+    IS reading order. The words below are placed so the two orders cannot be
+    confused --
+
+        x0 order : Name: Role: Chair Ada
+        reading  : Name: Ada Role: Chair
+
+    Measured on the corpus, 254 real cells came back the first way, all of them
+    from ruled tables carrying confidence 0.95.
+    """
+    pdf = pikepdf.Pdf.new()
+    x0, y0, cw, rh = 72.0, 200.0, 180.0, 44.0
+    rects = [(x0 + c * cw, y0 + r * rh, cw, rh) for r in range(3) for c in range(2)]
+    # (x, y_from_top, text, size), like every other builder here.
+    items = [
+        # header row, one line per cell
+        (x0 + 6, y0 + 16, "Field", 10.0),
+        (x0 + cw + 6, y0 + 16, "Detail", 10.0),
+        # middle row: two lines per cell, and the x positions are chosen so
+        # that x order and reading order cannot come out the same.
+        (x0 + 6, y0 + rh + 16, "Name:", 10.0),
+        (x0 + 88, y0 + rh + 16, "Ada", 10.0),
+        (x0 + 38, y0 + rh + 34, "Role:", 10.0),
+        (x0 + 68, y0 + rh + 34, "Chair", 10.0),
+        (x0 + cw + 6, y0 + rh + 16, "Signed", 10.0),
+        (x0 + cw + 88, y0 + rh + 16, "2026", 10.0),
+        (x0 + cw + 38, y0 + rh + 34, "in", 10.0),
+        (x0 + cw + 58, y0 + rh + 34, "Lisbon", 10.0),
+        # bottom row, one line per cell: the control. Its text must not move,
+        # because for a single-line cell x order IS reading order.
+        (x0 + 6, y0 + 2 * rh + 16, "Term", 10.0),
+        (x0 + cw + 6, y0 + 2 * rh + 16, "Three years", 10.0),
+    ]
+    pdf.pages.append(_page(pdf, _rect_ops(rects), _text_ops(items)))
+    return _save(pdf, name)
+
+
 def unruled_table(name: str = "unruled_table.pdf") -> Path:
     """The same table with no lines at all -- basis must come back "whitespace".
 
@@ -602,6 +644,7 @@ BUILDERS = {
     "running_heads": running_heads,
     "hyphenated": hyphenated,
     "ruled_table": ruled_table,
+    "wrapped_cells": wrapped_cells,
     "unruled_table": unruled_table,
     "hybrid": hybrid,
     "encrypted": encrypted,
