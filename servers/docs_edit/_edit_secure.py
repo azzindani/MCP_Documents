@@ -29,9 +29,25 @@ from shared.progress import ok as ok_step
 
 ACTIONS = ("encrypt", "decrypt", "permissions")
 
+# Every restriction off, written out. `pikepdf.Permissions()` reads like "no
+# permissions object", and it is not: it is a set of defaults, one of which
+# (`modify_assembly`) is False. A tool whose whole job is saying what a file
+# now allows cannot take that on trust -- measure the library call, do not
+# assume what it does with your value.
+ALL_ALLOWED = pikepdf.Permissions(
+    accessibility=True,
+    extract=True,
+    modify_annotation=True,
+    modify_assembly=True,
+    modify_form=True,
+    modify_other=True,
+    print_lowres=True,
+    print_highres=True,
+)
+
 
 def protect(source: str, action: str, password: str = "", out: str = "") -> dict:
-    """Encrypt, decrypt or set permissions on a PDF you have the password for."""
+    """Encrypt, decrypt, or clear a PDF's permission flags. Needs a password."""
     op = "protect"
     progress: list[dict] = []
     if action not in ACTIONS:
@@ -41,11 +57,20 @@ def protect(source: str, action: str, password: str = "", out: str = "") -> dict
             f"Use one of: {', '.join(ACTIONS)}.",
             progress,
         )
-    if action in {"encrypt", "decrypt"} and not password:
+    # All three, not just two. Permission flags only exist inside encryption,
+    # so `permissions` without a password had nothing to re-encrypt with and
+    # fell through to `encryption=False` -- which SILENTLY DECRYPTED the
+    # document. Handed a filing that was encrypted with printing and copying
+    # forbidden, it returned success, `action: "permissions"` and the progress
+    # line "permission flags cleared", and wrote a file any reader opens with
+    # no password at all. The one field that told the truth was `encrypted:
+    # false`, next to an action name that says nothing about encryption.
+    if not password:
         return fail(
             op,
             f"{action} needs a password.",
-            "Pass password='...'. This tool cannot recover a password it was not given.",
+            "Pass password='...'. Permission flags live inside a PDF's encryption, so changing them means "
+            "re-encrypting, and this tool cannot recover a password it was not given.",
             progress,
         )
 
@@ -78,7 +103,17 @@ def protect(source: str, action: str, password: str = "", out: str = "") -> dict
 
     try:
         if action == "encrypt":
-            handle.save(destination, encryption=pikepdf.Encryption(owner=password, user=password, R=6))
+            # `allow=` spelled out here too. Without it pikepdf's default
+            # applies and the encrypted file comes back forbidding
+            # `modify_assembly` -- so encrypting a document quietly withdrew
+            # permission to reorder its own pages, from the very caller who
+            # holds the password. The password is the protection being asked
+            # for; a restriction flag nobody requested is not part of it, and
+            # `encrypt` and `permissions` producing different flag sets from
+            # one library call was the tell.
+            handle.save(
+                destination, encryption=pikepdf.Encryption(owner=password, user=password, R=6, allow=ALL_ALLOWED)
+            )
             progress.append(ok_step("encrypted with AES-256 (R=6)"))
         elif action == "decrypt":
             handle.save(destination)  # saving without encryption= drops it
@@ -87,13 +122,18 @@ def protect(source: str, action: str, password: str = "", out: str = "") -> dict
             # Owner permissions only: the document stays encrypted for anyone
             # without the password, and the restriction flags that only ever
             # constrained a cooperating reader are cleared.
+            #
+            # Every flag spelled out rather than `pikepdf.Permissions()`. The
+            # default constructor is not all-permitted -- it sets
+            # `modify_assembly=False` -- so "cleared" left one restriction in
+            # place, and the no-password branch that dropped encryption
+            # entirely cleared it. One action, two different outcomes, neither
+            # of them stated.
             handle.save(
                 destination,
-                encryption=pikepdf.Encryption(owner=password, user="", allow=pikepdf.Permissions(), R=6)
-                if password
-                else False,
+                encryption=pikepdf.Encryption(owner=password, user="", allow=ALL_ALLOWED, R=6),
             )
-            progress.append(ok_step("permission flags cleared"))
+            progress.append(ok_step("permission flags cleared", "the document is still encrypted"))
         finish(destination)
     except (pikepdf.PdfError, OSError) as exc:
         return fail(
@@ -113,6 +153,14 @@ def protect(source: str, action: str, password: str = "", out: str = "") -> dict
         "encrypted": encrypted_now,
         "bytes": destination.stat().st_size,
     }
+    # What the file still FORBIDS, read back off the disk. `permissions` had only
+    # a progress line saying "permission flags cleared" -- a report of what was
+    # asked for, which is exactly what this repo refuses to accept from any
+    # other tool. Naming the flags also makes the answer checkable by a reader
+    # that is not this server, which is how the silent decrypt was found.
+    restrictions = _permissions_of(destination, password)
+    if restrictions is not None:
+        result["restrictions"] = restrictions
     if action == "encrypt" and not encrypted_now:
         return fail(
             op,
@@ -122,6 +170,32 @@ def protect(source: str, action: str, password: str = "", out: str = "") -> dict
             **result,
         )
     return ok(op, result, progress)
+
+
+def _permissions_of(path, password: str) -> list[str] | None:
+    """The restrictions still in force, by name. None where there are none.
+
+    An unencrypted PDF carries no permission flags at all, and reporting eight
+    `true`s for it would say "everything is explicitly allowed here" about a
+    file that has no such statement in it.
+
+    Opened without the password first, for the reason the main path above does
+    it: pikepdf emits "A password was provided, but no password was needed to
+    open this PDF" otherwise, and this function runs on every `protect` call
+    including the `decrypt` one, whose output never needs a password. The first
+    version of it printed that warning on every decrypt.
+    """
+    try:
+        try:
+            handle = pikepdf.open(path)
+        except pikepdf.PasswordError:
+            handle = pikepdf.open(path, password=password or "")
+        with handle:
+            if not handle.is_encrypted:
+                return None
+            return sorted(name for name, allowed in handle.allow._asdict().items() if not allowed)
+    except pikepdf.PasswordError, pikepdf.PdfError:
+        return None
 
 
 def _is_encrypted(path, password: str) -> bool:
