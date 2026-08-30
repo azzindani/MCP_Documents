@@ -165,8 +165,17 @@ def extract_tables(
     # vocabulary, on the one kind of table that involves no inference at all.
     # The tables themselves said `native` with confidence 1.0 in the same
     # response, so the summary contradicted its own contents.
-    basis = weakest_basis((t["basis"] for t in kept), fallback="whitespace")
-    return ok(op, result, progress, basis=basis if kept else "empty")
+    #
+    # And it describes what was FOUND, not what survived `min_confidence`. A
+    # filter that removes every table left `basis: "empty"` -- "nothing here to
+    # obtain", the only basis worth 0.0 confidence -- in the same object as
+    # `found_before_filter: 1`. Two fields of one response, flatly
+    # contradicting each other, on a page whose table this server had just read
+    # at 0.95. `empty` is for a page with nothing on it, not for a page whose
+    # tables the caller asked not to see.
+    reported = kept or found
+    basis = weakest_basis((t["basis"] for t in reported), fallback="whitespace")
+    return ok(op, result, progress, basis=basis if reported else "empty")
 
 
 def _estimate_tokens(doc, wanted: list[int]) -> int:
