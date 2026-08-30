@@ -82,16 +82,26 @@ def _describe(doc: Document, progress: list[dict]) -> dict:
     empty: list[int] = []
     total_chars = 0
 
+    # Three buckets, and they are MUTUALLY EXCLUSIVE. A page used to be put in
+    # both `empty` and `scanned` and the count then subtracted one from the
+    # other, so `page_kinds.scanned` was zero for every ordinary scan -- a real
+    # one extracts exactly 0 characters, and only a page in the 1..31 band
+    # could survive the subtraction. A 1 MB scanned invoice reported
+    # `{born_digital: 0, scanned: 0, empty: 1}` beside `scanned_pages: "1"`:
+    # two fields of one response disagreeing, and the one a caller branches on
+    # to decide whether to OCR was the wrong one.
+    #
+    # What separates the last two is ink, not characters. `has_content` is the
+    # reader's answer to "is there anything here OCR could read".
     for number in range(1, doc.page_count + 1):
         page = load_page(doc, number)
         total_chars += page.char_count
-        if page.char_count == 0:
-            empty.append(number)
-            scanned.append(number)
-        elif page.is_scanned:
+        if not page.is_scanned:
+            digital.append(number)
+        elif page.has_content:
             scanned.append(number)
         else:
-            digital.append(number)
+            empty.append(number)
     progress.append(info(f"read the text layer of {doc.page_count} pages"))
 
     sample = _sample(doc.page_count)
@@ -113,14 +123,19 @@ def _describe(doc: Document, progress: list[dict]) -> dict:
     tokens_full = budget.estimate_tokens("x" * total_chars)
     fits = budget.pages_that_fit(total_chars, doc.page_count)
 
-    if scanned and not digital:
+    # `extractable` is about TEXT, so a blank page counts against it exactly as
+    # a scanned one does -- neither yields any. Splitting the two buckets apart
+    # above meant this had to stop asking only about `scanned`, or a document
+    # of blank pages would have reported `extractable: "full"`.
+    without_text = sorted(scanned + empty)
+    if without_text and not digital:
         extractable = "none"
-    elif scanned:
+    elif without_text:
         extractable = "partial"
     else:
         extractable = "full"
     if extractable != "full":
-        progress.append(warn(f"{len(scanned)} page(s) have no text layer", f"pages {format_pages(scanned)}"))
+        progress.append(warn(f"{len(without_text)} page(s) have no text layer", f"pages {format_pages(without_text)}"))
 
     first = doc.pages.get(1)
     result = {
@@ -137,9 +152,11 @@ def _describe(doc: Document, progress: list[dict]) -> dict:
         # email -- where this server divided a continuous document into pages
         # of its own choosing, and says how big it made them.
         "pagination": doc.meta.get("pagination", "native"),
+        # The three counts sum to page_count, because the buckets above are
+        # exclusive. They used to overlap and be subtracted back apart.
         "page_kinds": {
             "born_digital": len(digital),
-            "scanned": len(scanned) - len(empty),
+            "scanned": len(scanned),
             "empty": len(empty),
         },
         # A selection string rather than a list: it is meant to be pasted

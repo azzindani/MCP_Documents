@@ -43,8 +43,7 @@ def extract(
     estimated = _estimate_tokens(doc, wanted)
     ceiling = budget.max_response_tokens()
     if estimated > ceiling:
-        fits = max(1, int(len(wanted) * ceiling / estimated))
-        suggestion = format_pages(wanted[:fits])
+        suggestion = format_pages(suggest_range(doc, wanted, ceiling, estimated))
         return refuse(
             op,
             f"Those {len(wanted)} page(s) are about {estimated:,} tokens, over the {ceiling:,} limit.",
@@ -171,3 +170,38 @@ def _estimate_tokens(doc, wanted: list[int]) -> int:
         chars += load_page(doc, number).char_count
     per_page = chars / len(sample)
     return int(per_page * len(wanted)) // budget.CHARS_PER_TOKEN
+
+
+# How many times to re-measure a candidate range before handing it over. Each
+# pass strictly shrinks the range, so this terminates; four is far more than
+# any real document has needed.
+MAX_FIT_PASSES = 4
+
+
+def suggest_range(doc, wanted: list[int], ceiling: int, estimated: int) -> list[int]:
+    """The largest prefix of `wanted` that THIS ESTIMATOR says will fit.
+
+    A budget refusal is a `refuse`, not a `fail`: the caller did nothing wrong
+    and the hint carries a value they can use. So the value has to work, and
+    the only way to know that is to measure the candidate with the same
+    function that will judge their next call.
+
+    Scaling alone does not work, and the failure is systematic rather than
+    unlucky. `len(wanted) * ceiling / estimated` spreads the whole range's cost
+    evenly and then takes the FRONT of it, and the front of a document is
+    denser than its mean -- front matter, dense legal preamble, a contents
+    page. Measured on a 238-page regulation: mean 1,358 characters a page but
+    1,522 over the first 23, so the refusal said `pages='1-23'`, the caller
+    followed it verbatim, and got refused again with `pages='1-20'`.
+    """
+    fits = max(1, int(len(wanted) * ceiling / estimated)) if estimated else len(wanted)
+    for _ in range(MAX_FIT_PASSES):
+        if fits <= 1:
+            break
+        cost = _estimate_tokens(doc, wanted[:fits])
+        if cost <= ceiling:
+            break
+        # Shrink by the measured overshoot, and by at least one page, so a
+        # ratio that rounds back to the same number cannot stall.
+        fits = max(1, min(fits - 1, int(fits * ceiling / cost)))
+    return wanted[:fits]

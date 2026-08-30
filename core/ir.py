@@ -108,6 +108,17 @@ class Page:
     confidence: float | None = None  # only where the method has one (OCR)
     columns: int = 1  # detected, never assumed -- see core/order.py
 
+    # Is there anything on this page that OCR could read? Set by a reader that
+    # can see ink -- the PDF reader counts the page's drawable objects. Without
+    # it, a page with no text layer is ambiguous between "a scan" and "a blank
+    # separator sheet", and probe() reported the two as one bucket: a 1 MB
+    # scanned invoice came back as `empty: 1, scanned: 0`.
+    #
+    # Defaults to FALSE, so a format with no pixels (HTML, text, email) never
+    # claims a blank page could be OCR'd. Only a reader that has actually
+    # looked sets it True.
+    has_content: bool = False
+
     @property
     def text(self) -> str:
         return "\n".join(b.text for b in self.blocks)

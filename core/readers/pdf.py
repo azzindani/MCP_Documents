@@ -146,9 +146,32 @@ def load_page(doc: Document, number: int) -> Page:
     # single burned-in page number, the way real scans do. One stray glyph is
     # not a text layer.
     page.basis = _text_layer_basis(text)
+    page.has_content = _has_drawable_content(raw)
 
     doc.pages[number] = page
     return page
+
+
+def _has_drawable_content(raw) -> bool:
+    """Is there ink on this page — anything OCR could be pointed at?
+
+    The one thing that separates a scan from a blank separator sheet once the
+    text layer is empty, and probe() had no way to ask it: a 1 MB scanned
+    invoice and an empty page both counted as `empty`.
+
+    Counting objects rather than rendering, because this runs for every page of
+    a 600-page document during probe(). One object is enough of an answer, so
+    the scan stops there.
+    """
+    try:
+        for _ in raw.get_objects():
+            return True
+    except Exception:  # noqa: BLE001 - a page whose objects cannot be walked
+        # Assume there is something rather than nothing. Reporting a page as
+        # blank because we could not look is the wrong way to be wrong: it
+        # tells the caller not to bother with OCR.
+        return True
+    return False
 
 
 def load_page_words(doc: Document, number: int) -> Page:
