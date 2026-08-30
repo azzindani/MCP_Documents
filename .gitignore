@@ -15,6 +15,11 @@ build/
 .pyright/
 tokens.json
 
+# Machine-specific compose additions — an extra read-only mount for a local
+# document corpus, a different port, a bigger mem_limit. Docker Compose merges
+# this automatically, so it belongs to the machine and not to the repo.
+docker-compose.override.yml
+
 # OAuth 2.0 bridge state (issued access/refresh tokens) — see oauth_bridge.py
 oauth-state/
 
