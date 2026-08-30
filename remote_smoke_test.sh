@@ -191,6 +191,20 @@ docker exec "$CONTAINER" test -s "$PDF" &&
   pass "the PDF is a real non-empty file on disk, not just a success message" ||
   fail "no file at $PDF inside the container"
 
+# The other half of convert. `to='pdf'` above satisfies the coverage guard on
+# its own, which is how the image path went unexercised while it rendered at
+# whatever the memory budget allowed -- 600 DPI for one page, 62 for a whole
+# filing, so the same page came back at two resolutions depending only on how
+# many neighbours were in the call.
+run edit convert "{\"source\":\"$PDF\",\"to\":\"images\",\"out\":\"$D/pages\"}" "render the PDF to images"
+IMG_DPI=$(extract_num "$LAST_R" dpi)
+[ "$IMG_DPI" = "150" ] &&
+  pass "rendered at the default 150 DPI, not at whatever memory was spare" ||
+  fail "dpi=$IMG_DPI -- the resolution is not the measured default"
+docker exec "$CONTAINER" test -s "$D/pages/page_0001.png" &&
+  pass "page_0001.png is a real non-empty file" ||
+  fail "convert(to='images') wrote no page_0001.png"
+
 echo
 echo "===== docs-read: 7 tools ====="
 run read probe "{\"source\":\"$PDF\"}" "what is this document?"
@@ -252,6 +266,16 @@ MD_BASIS=$(extract "$LAST_R" basis)
 [ "$MD_BASIS" = "native" ] &&
   pass "basis says 'native' — the document declared this, it was not inferred" ||
   fail "basis='$MD_BASIS' for a format that declares its own headings"
+
+# The SAME tool against the SAME content as a PDF. A PDF declares no tables, so
+# `tables` counts what was rendered rather than what is there -- and for two
+# rounds it reported 0 for a page that is entirely a table, while
+# extract_tables() on that page returned one. A count nobody can read correctly
+# has to say what it counts.
+run read to_markdown "{\"source\":\"$PDF\"}" "give me the PDF as markdown"
+has_text "$LAST_R" "extract_tables(" &&
+  pass "to_markdown names the tool that has the rows it did not render" ||
+  fail "to_markdown reported a table count with nothing saying what it counts"
 
 echo
 echo "===== docs-read against a format that is not PDF ====="

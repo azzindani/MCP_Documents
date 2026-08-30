@@ -98,6 +98,40 @@ def render_bytes(width: float, height: float, dpi: int) -> int:
     return int((width / 72.0 * dpi) * (height / 72.0 * dpi) * BYTES_PER_PIXEL)
 
 
+def render_dpi() -> int:
+    """The resolution a page is rendered at, independent of the batch.
+
+    Measured on the corpus rather than argued. At 72 DPI the 6pt note
+    references down the middle of a bank filing are legible but tight; at 150
+    they are comfortable, and every figure in a financial table reads cleanly.
+    Above that the file grows with the square and the reading does not improve:
+    600 DPI of one US Letter page is 33.7 megapixels and a 1.4 MB PNG.
+
+    A default, not a ceiling. `dpi_that_fits` is the ceiling, and the two are
+    separate for the reason ocr_page_timeout and max_ocr_seconds are separate:
+    "what does a good render look like" and "what fits in memory" are two
+    questions, and answering the first with the second made resolution a
+    function of how many pages the caller happened to ask for.
+
+    `ocr()` next door has done this since it was written -- a fixed
+    DOCS_OCR_DPI with its own measurement in a comment beside it.
+    """
+    return int(os.environ.get("DOCS_RENDER_DPI", "150"))
+
+
+def pages_that_fit_render(width: float, height: float, dpi: int) -> int:
+    """How many pages of this size render at this DPI inside the budget.
+
+    Returned in a refusal so the hint can name a page range that works, rather
+    than telling the caller to "render fewer" and leaving them to find out how
+    many fewer by bisection.
+    """
+    per_page = render_bytes(width, height, dpi)
+    if per_page <= 0:
+        return 1
+    return max(1, max_render_bytes() // per_page)
+
+
 def dpi_that_fits(width: float, height: float, pages: int = 1) -> int:
     """The largest whole DPI whose render stays inside the budget.
 

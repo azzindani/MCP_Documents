@@ -35,7 +35,7 @@ from pathlib import Path
 from core import binaries, budget
 from core.formatter import fail, ok, refuse
 from core.paths import PathError, finish, resolve_out, resolve_source
-from shared.progress import info
+from shared.progress import info, warn
 from shared.progress import ok as ok_step
 
 OP = "convert"
@@ -250,15 +250,39 @@ def _to_images(src: Path, out: str, progress: list[dict]) -> dict:
     try:
         first = handle[0]
         width, height = first.get_size()
-        dpi = budget.dpi_that_fits(width, height, len(handle))
-        if dpi < 72:
+        # The ceiling and the setting are two different numbers. `dpi_that_fits`
+        # answers "what is the largest render that stays inside the memory
+        # budget", and using its answer as the resolution made the resolution a
+        # property of the BATCH: 600 DPI for one page, 423 for four, 189 for
+        # twenty, 62 for the whole filing. Page 6 of the same document came back
+        # 5100 x 6601 asked for on its own and 3596 x 4653 asked for with three
+        # neighbours -- nothing about the page changed, only its company.
+        ceiling = budget.dpi_that_fits(width, height, len(handle))
+        if ceiling < 72:
+            # The hint has to name something that can actually be done. It used
+            # to say "accept N DPI by rendering a range with read_page()", and
+            # read_page() renders nothing -- it returns text, tables and links,
+            # and has no DPI. `convert` has no `pages` parameter either, so
+            # "render fewer pages" was not available through the tool that had
+            # just refused. Both halves were impossible.
+            fits = budget.pages_that_fit_render(width, height, budget.render_dpi())
             return refuse(
                 OP,
                 f"Rendering {len(handle)} page(s) does not fit the memory budget at a usable resolution.",
-                f"Render fewer pages, or accept {dpi} DPI by rendering a range with read_page().",
+                f"Take a range first, then render it: assemble(sources=['{src}'], "
+                f"select='{src.stem}:1-{fits}', out='part.pdf') then convert(source='part.pdf', to='images'). "
+                f"{fits} page(s) of this size fit at {budget.render_dpi()} DPI.",
                 limit=f"{budget.max_render_bytes():,} bytes",
                 seen=f"{len(handle)} pages",
                 progress=progress,
+            )
+        dpi = min(budget.render_dpi(), ceiling)
+        if dpi < budget.render_dpi():
+            progress.append(
+                warn(
+                    f"rendering at {dpi} DPI rather than {budget.render_dpi()}",
+                    f"{len(handle)} pages at once do not fit the {budget.max_render_bytes():,} byte render budget",
+                )
             )
         try:
             directory = resolve_out(out or f"{src.stem}_pages", src, "")
