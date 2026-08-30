@@ -1,0 +1,62 @@
+[project]
+name = "documents-mcp-server"
+version = "0.0.1"
+description = "Self-hosted MCP server for document extraction and manipulation"
+requires-python = "==3.14.*"
+dependencies = [
+    "mcp>=1.0,<2.0",
+    # Reading. pypdfium2 for speed and rendering, pdfplumber for word boxes and
+    # ruling lines, pikepdf for every structural operation. This trio is chosen
+    # over the faster PyMuPDF deliberately: PyMuPDF is AGPL-3.0 and this stack
+    # is permissive throughout. See docs/TECH_STACK.md §2 before changing it.
+    "pypdfium2>=4.30,<5.0",
+    "pdfplumber>=0.11,<1.0",
+    "pikepdf>=9.0,<10.0",
+    # Other formats. One reader per format, all normalising into engine/ir.py,
+    # which is what keeps the tool count at 13 -- see docs/ARCHITECTURE.md §3.
+    "lxml>=5.0,<6.0",
+    "python-docx>=1.1,<2.0",
+    "openpyxl>=3.1,<4.0",
+    "python-pptx>=1.0,<2.0",
+    "charset-normalizer>=3.3,<4.0",
+]
+
+# Deliberately absent, and not to be added without reading docs/TECH_STACK.md:
+#   PyMuPDF / fitz     AGPL-3.0
+#   ghostscript wheels AGPL-3.0
+#   pdf2docx           licence unverified; needed only for pdf -> docx
+#   ebooklib           believed AGPL-3.0; epub is a zip of XHTML, so lxml does it
+#   unstructured / docling / any layout model -- model weights break offline
+#   tabula-py -- requires a JVM
+#
+# Lock WITHOUT --upgrade. A sibling repo took a mystery TypeError in production
+# when a transitive scipy bump changed what a string argument resolves to; the
+# pin was right and the lock refresh was not.
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0,<9.0",
+    "pyright>=1.1,<2.0",
+    "ruff>=0.9,<1.0",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["E402"]
+
+# Note for anyone adding type-checking config: a pyrightconfig.json OVERRIDES
+# this table. Three sibling repos have one, and a stale pythonVersion in it cost
+# a CI round -- ruff on py314 writes PEP 758's unparenthesised `except A, B:`,
+# which a pyright pinned to 3.12 rejects as a syntax error. Do not create one.
+[tool.pyright]
+pythonVersion = "3.14"
+typeCheckingMode = "basic"
+reportMissingImports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
