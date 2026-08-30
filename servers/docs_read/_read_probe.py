@@ -137,7 +137,7 @@ def _describe(doc: Document, progress: list[dict]) -> dict:
     if extractable != "full":
         progress.append(warn(f"{len(without_text)} page(s) have no text layer", f"pages {format_pages(without_text)}"))
 
-    first = doc.pages.get(1)
+    common, odd_pages = _page_sizes(doc)
     result = {
         "format": doc.format,
         "pages": doc.page_count,
@@ -146,7 +146,10 @@ def _describe(doc: Document, progress: list[dict]) -> dict:
         # None, not [0.0, 0.0], for a format with no geometry. A page size of
         # zero is a measurement that reads as real; None says there is nothing
         # to measure, which for HTML or an email body is the truth.
-        "page_size": [round(first.width, 1), round(first.height, 1)] if first and first.width else None,
+        #
+        # The MOST COMMON size, not page 1's -- and when the document holds more
+        # than one, `pages_of_other_size` names the rest. See _page_sizes.
+        "page_size": common,
         # Whether the page numbers in every other response mean anything in the
         # file itself. "synthetic" for the flow formats -- HTML, text, Word,
         # email -- where this server divided a continuous document into pages
@@ -171,6 +174,17 @@ def _describe(doc: Document, progress: list[dict]) -> dict:
     }
     if result["pagination"] == "synthetic":
         result["chars_per_page"] = doc.meta.get("chars_per_page")
+    # Only when there is something to disclose. A uniform document carrying
+    # `pages_of_other_size: ""` invites the reading that some pages differ and
+    # the server could not say which.
+    if odd_pages:
+        result["pages_of_other_size"] = format_pages(odd_pages)
+        progress.append(
+            warn(
+                f"{len(odd_pages)} page(s) are not {result['page_size'][0]:g} x {result['page_size'][1]:g} pt",
+                f"pages {format_pages(odd_pages)}",
+            )
+        )
     if has_ruling:
         result["tables"] = {
             "pages_with_ruling_lines": ruled,
@@ -186,6 +200,36 @@ def _describe(doc: Document, progress: list[dict]) -> dict:
     if extras:
         result["format_details"] = extras(doc)
     return ok(OP, result, progress, basis=_document_basis(doc, digital))
+
+
+def _page_sizes(doc: Document) -> tuple[list[float] | None, list[int]]:
+    """The document's usual page size, and the pages that are not that size.
+
+    `page_size` used to be page 1's geometry reported as the document's. That is
+    the per-document verdict this module rejects everywhere else: a hybrid PDF
+    is born-digital on page 1 and a scan on page 40, so `scanned` is reported as
+    counts and a selection string rather than one boolean. Page geometry is no
+    different, and a real filing proves it -- 178 pages of US Letter portrait,
+    one A4, and four LANDSCAPE pages carrying /Rotate 90. Those four are the
+    widest tables in the document and the ones a caller most needs to know are
+    turned sideways, and probe said `[612.0, 792.0]` and nothing else.
+
+    Most common rather than first, because the answer should describe the
+    document rather than whichever page happens to be at the front -- a cover
+    page is routinely a different size from the body.
+    """
+    sizes: dict[tuple[float, float], list[int]] = {}
+    for number in sorted(doc.pages):
+        page = doc.pages[number]
+        if not page.width:
+            continue
+        sizes.setdefault((round(page.width, 1), round(page.height, 1)), []).append(number)
+    if not sizes:
+        return None, []
+
+    common = max(sizes, key=lambda size: len(sizes[size]))
+    odd = sorted(n for size, pages in sizes.items() if size != common for n in pages)
+    return [common[0], common[1]], odd
 
 
 def _document_basis(doc: Document, digital: list[int]) -> Basis:
