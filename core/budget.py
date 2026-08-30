@@ -103,3 +103,16 @@ def pages_that_fit(total_chars: int, page_count: int) -> int:
     per_page = max(1, total_chars // page_count)
     fits = (max_response_tokens() * CHARS_PER_TOKEN) // per_page
     return max(1, min(page_count, fits))
+
+
+def max_table_pages() -> int:
+    """Pages one extract_tables call may scan.
+
+    pdfplumber costs 10-100x more per page than the text layer -- measured on
+    the corpus at roughly 5-20 pages/sec against hundreds -- so a whole-document
+    table sweep of a 600-page regulation is minutes, not seconds. This is a
+    TIME budget wearing a page count, and it is checked before the work starts:
+    a call that scans 600 pages and is then killed by the client timeout has
+    spent the time and lost the result.
+    """
+    return int(os.environ.get("DOCS_MAX_TABLE_PAGES", "10" if constrained() else "50"))

@@ -132,3 +132,107 @@ def _describe(doc: Document, progress: list[dict]) -> dict:
         "pages_that_fit_one_response": fits,
     }
     return ok(OP, result, progress, basis="text_layer" if digital else "empty")
+
+
+# A line must be this much larger than the body to be an inferred heading, and
+# no longer than this. Same constants as to_markdown's, and deliberately the
+# same numbers: two tools disagreeing about what a heading is would be the
+# fleet's most repeated defect -- a formula written down twice whose copies
+# drifted -- so this imports them rather than restating them.
+def outline(source: str, password: str = "") -> dict:
+    """List headings and bookmarks with page anchors. Use before extract."""
+    op = "outline"
+    progress: list[dict] = []
+    try:
+        doc = pdf_reader.open_document(source, password)
+    except pdf_reader.PdfError as exc:
+        return fail(op, str(exc), exc.hint, progress)
+
+    try:
+        entries = _bookmarks(doc)
+        if entries:
+            progress.append(info(f"{len(entries)} bookmark(s) from the document's own outline"))
+            return ok(op, {"entries": entries, "count": len(entries)}, progress, basis="tagged")
+
+        # Most real documents have no bookmarks. Measured across the corpus,
+        # four of five did not -- two government regulations, a 68-page
+        # contract and a CFR volume all have an empty outline -- so the
+        # inferred path is the common case, not the exception, and it has to
+        # say that it is inferred.
+        progress.append(info("no bookmarks; inferring headings from type size"))
+        entries = _inferred(doc, progress)
+        if not entries:
+            return ok(
+                op,
+                {"entries": [], "count": 0},
+                progress,
+                basis="empty",
+                hint="No bookmarks and no headings stand out by size. Use find() to navigate instead.",
+            )
+        return ok(op, {"entries": entries, "count": len(entries)}, progress, basis="font_size")
+    finally:
+        pdf_reader.close_document(doc)
+
+
+def _bookmarks(doc) -> list[dict]:
+    handle = doc.handle
+    if handle is None:
+        return []
+    out: list[dict] = []
+    for item in handle.get_toc():
+        page_index = item.page_index
+        out.append(
+            {
+                "level": int(item.level) + 1,
+                "title": (item.title or "").strip(),
+                # page_index is 0-based and may be None for a bookmark whose
+                # destination is not a page; every page number a caller sees
+                # elsewhere here is 1-based, so converting at the boundary
+                # keeps outline's output usable in extract(pages=...).
+                "page": (page_index + 1) if page_index is not None else None,
+                "basis": "tagged",
+            }
+        )
+    return out
+
+
+# Pages sampled when inferring headings. Reading every page of an 843-page
+# volume to build a table of contents costs more than the caller saved by not
+# reading the document, and headings cluster near section starts anyway.
+OUTLINE_SAMPLE_PAGES = 60
+
+
+def _inferred(doc, progress: list[dict]) -> list[dict]:
+    from core import order
+    from servers.docs_read._read_page import HEADING_RATIO, MAX_HEADING_CHARS
+
+    numbers = _sample(doc.page_count, OUTLINE_SAMPLE_PAGES)
+    if len(numbers) < doc.page_count:
+        progress.append(info(f"sampled {len(numbers)} of {doc.page_count} pages"))
+
+    sized: list[tuple[int, str, float]] = []
+    for number in numbers:
+        page = pdf_reader.load_page_words(doc, number)
+        blocks = order.order_blocks(page, order.detect_columns(page))
+        for text, size in order.lines_with_size(blocks):
+            if text.strip():
+                sized.append((number, text.strip(), size))
+    if not sized:
+        return []
+
+    sizes = sorted(size for _, _, size in sized if size)
+    if not sizes:
+        return []
+    body_size = sizes[len(sizes) // 2]
+    threshold = body_size * HEADING_RATIO
+
+    return [
+        {
+            "level": 1 if size >= body_size * 1.5 else 2,
+            "title": text,
+            "page": number,
+            "basis": "font_size",
+        }
+        for number, text, size in sized
+        if size > threshold and len(text) <= MAX_HEADING_CHARS
+    ]

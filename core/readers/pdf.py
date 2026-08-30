@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pypdfium2 as pdfium
 
-from core.ir import Block, Document, Page, Span
+from core.ir import MIN_CHARS_FOR_TEXT_LAYER, Basis, Block, Document, Page, Span
 
 # pdfplumber is imported lazily inside the functions that need geometry: it
 # pulls pdfminer.six, which is pure Python and slow to import, and the common
@@ -87,6 +87,24 @@ def close_document(doc: Document) -> None:
     doc.password = ""
 
 
+def _text_layer_basis(raw_text: str) -> Basis:
+    """Decide from the PAGE's own text whether it has a usable text layer.
+
+    One function, used by both readers, because the answer is a property of the
+    page and must not depend on which reader looked at it. It did: load_page
+    builds one block per LINE (spaces included) and load_page_words one block
+    per WORD (spaces excluded), so the same page counted 32 characters through
+    one path and 28 through the other -- and the 32-character threshold then
+    classified a real page of text as a scan.
+
+    The symptom was a whole page silently dropped from an extraction: the last
+    line of the hyphenated fixture, "sider the proposal next quarter.", vanished
+    and its word rejoined nothing. Short pages are ordinary -- a title page, a
+    section divider, the final page of a document -- so this is not an edge case.
+    """
+    return "text_layer" if len(raw_text.strip()) >= MIN_CHARS_FOR_TEXT_LAYER else "empty"
+
+
 def load_page(doc: Document, number: int) -> Page:
     """Read one page's geometry and text layer into the IR. 1-based.
 
@@ -125,7 +143,7 @@ def load_page(doc: Document, number: int) -> Page:
     # The hybrid fixture is what surfaced it: its page 4 is a scan carrying a
     # single burned-in page number, the way real scans do. One stray glyph is
     # not a text layer.
-    page.basis = "text_layer" if not page.is_scanned else "empty"
+    page.basis = _text_layer_basis(text)
 
     doc.pages[number] = page
     return page
@@ -158,8 +176,11 @@ def load_page_words(doc: Document, number: int) -> Page:
             )
             blocks.append(Block(kind="para", spans=[span], bbox=span.bbox, order=i, basis="text_layer"))
         page.blocks = blocks
-        page.basis = "text_layer" if blocks else "empty"
 
+    # Classified from the page's own text via the cheap reader, not from the
+    # word blocks built here -- see _text_layer_basis. Reusing load_page also
+    # costs nothing: it is cached on the Document.
+    page.basis = load_page(doc, number).basis
     doc.pages[number] = page
     return page
 

@@ -108,8 +108,14 @@ class Page:
 
     @property
     def is_scanned(self) -> bool:
-        """No usable text layer, so the pixels are the only content."""
-        return self.basis != "ocr" and self.char_count < MIN_CHARS_FOR_TEXT_LAYER
+        """No usable text layer, so the pixels are the only content.
+
+        Reads the reader's verdict rather than recounting. Counting here meant
+        counting whatever blocks happened to be present, and word blocks carry
+        no spaces while line blocks do -- so one page answered differently
+        depending on which reader had most recently touched it.
+        """
+        return self.basis in {"empty", "whitespace"} and self.basis != "ocr"
 
 
 @dataclass(slots=True)
