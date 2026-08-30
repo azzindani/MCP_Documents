@@ -25,6 +25,7 @@ server's own contract forbids. The two return identical text.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pypdfium2 as pdfium
@@ -147,6 +148,9 @@ def load_page(doc: Document, number: int) -> Page:
     # not a text layer.
     page.basis = _text_layer_basis(text)
     page.has_content = _has_drawable_content(raw)
+    # Kept so that what this page says it contains does not depend on which
+    # reader looked at it last -- see Page.raw_text.
+    page.raw_text = text
 
     doc.pages[number] = page
     return page
@@ -174,6 +178,90 @@ def _has_drawable_content(raw) -> bool:
     return False
 
 
+# A complete thousands-grouped figure, as a rupiah statement prints it, with
+# something stuck to its right that is NOT a continuation of the number. The
+# two lookaheads matter more than they look: without them `1.424.901.522` splits
+# after `1.424.901`, and `10.000,00` splits after `10.000,0` -- which is how the
+# first two versions of this rule silently truncated figures in six other
+# documents while fixing one.
+_GLUED_FIGURE = re.compile(r"^(\(?\d{1,3}(?:\.\d{3})+\)?)(?![.,]\d)(.+)$")
+
+# The gap, in points, that must sit at the boundary before a token is split.
+# Measured across 32 real documents rather than reasoned about: the tokens this
+# pattern matches have a boundary gap of at most 0.05pt when the token is a real
+# word, and at least 1.92pt when two things have been wrongly joined. There is
+# nothing in between, and 1.0 sits in the void.
+#
+# An earlier version used the gap ALONE, at 1.0. That was wrong and measuring it
+# is the only reason it did not ship: a negative figure's own closing bracket
+# sits 1.26pt from its last digit in one filing and 2.58pt in another, so a
+# gap-only rule turns `(90.901.000)` into a positive number. The bracket is
+# excluded by the tail test below, not by this constant.
+MIN_GLUE_GAP = 1.0
+
+
+def _unglue(raw, words: list[dict]) -> list[dict]:
+    """Split words pdfplumber joined that the page's own layout keeps apart.
+
+    pdfplumber segments words by horizontal gap with a 3pt tolerance. In a
+    two-language financial statement the English label of a row butts up against
+    the last digit of the Indonesian column, closer than that, and the two are
+    returned as one token:
+
+        259.358.79331          total equity, 259.358.793, then `31 March 2026`
+        8.450.933receivables   a figure, then the next column's label
+
+    The first of those is the dangerous one. `8.450.933receivables` is visibly
+    wrong and a reader recovers the number; `259.358.79331` is a plausible
+    12-digit figure that is not the one in the document, returned under
+    basis="text_layer" with success=true. It was the bank's total equity.
+
+    Lowering pdfplumber's tolerance globally is the obvious fix and it is a
+    worse defect: measured across the corpus, a negative figure's own closing
+    bracket sits further from its digits (1.26-2.58pt) than these glued tokens
+    do, so a smaller tolerance strips brackets off negative numbers and silently
+    flips their sign. This splits on the SHAPE of the token instead, and only
+    where the characters confirm a real gap at that exact boundary.
+
+    Deliberately narrow. It fires on ten tokens across the 32 real documents it
+    was measured against, and on nothing else -- a page whose characters do not
+    reconstruct the token is left alone, which is what happens on the judgments
+    whose rotated margin watermark interleaves with the body text.
+    """
+    by_line: dict[float, list[dict]] = {}
+    for char in raw.chars:
+        by_line.setdefault(round(char["top"], 1), []).append(char)
+
+    out: list[dict] = []
+    for word in words:
+        match = _GLUED_FIGURE.match(word["text"])
+        # A tail of `)` is the figure's own bracket, never a second token.
+        if not match or match.group(2)[0] in ")" or not match.group(2)[0].isalnum():
+            out.append(word)
+            continue
+
+        line = by_line.get(round(word["top"], 1), [])
+        inside = sorted(
+            (c for c in line if word["x0"] - 0.5 <= c["x0"] and c["x1"] <= word["x1"] + 0.5),
+            key=lambda c: c["x0"],
+        )
+        cut = len(match.group(1))
+        if "".join(c["text"] for c in inside) != word["text"] or not 0 < cut < len(inside):
+            out.append(word)
+            continue
+        if inside[cut]["x0"] - inside[cut - 1]["x1"] < MIN_GLUE_GAP:
+            out.append(word)
+            continue
+
+        for chars in (inside[:cut], inside[cut:]):
+            piece = dict(word)
+            piece["text"] = "".join(c["text"] for c in chars)
+            piece["x0"] = float(chars[0]["x0"])
+            piece["x1"] = float(chars[-1]["x1"])
+            out.append(piece)
+    return out
+
+
 def load_page_words(doc: Document, number: int) -> Page:
     """Re-read one page WITH word geometry, via pdfplumber.
 
@@ -193,7 +281,8 @@ def load_page_words(doc: Document, number: int) -> Page:
             rotation=int(raw.rotation or 0),
         )
         blocks = []
-        for i, word in enumerate(raw.extract_words(use_text_flow=False, keep_blank_chars=False)):
+        words = _unglue(raw, raw.extract_words(use_text_flow=False, keep_blank_chars=False))
+        for i, word in enumerate(words):
             span = Span(
                 text=str(word["text"]),
                 bbox=(float(word["x0"]), float(word["top"]), float(word["x1"]), float(word["bottom"])),
@@ -205,7 +294,15 @@ def load_page_words(doc: Document, number: int) -> Page:
     # Classified from the page's own text via the cheap reader, not from the
     # word blocks built here -- see _text_layer_basis. Reusing load_page also
     # costs nothing: it is cached on the Document.
-    page.basis = load_page(doc, number).basis
+    #
+    # The text layer is carried across for the same reason, and it matters more
+    # here: this page is about to REPLACE the cheap one in the cache, and
+    # without this the document would appear to lose every space it has to
+    # anyone who reads `page.text` afterwards.
+    cheap = load_page(doc, number)
+    page.basis = cheap.basis
+    page.raw_text = cheap.raw_text
+    page.has_content = cheap.has_content
     doc.pages[number] = page
     return page
 
