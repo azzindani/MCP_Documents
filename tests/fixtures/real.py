@@ -77,6 +77,13 @@ DOCUMENTS: dict[str, tuple[str, str]] = {
         "regulation/us_gov_CFR-2025-title7-vol2.pdf",
         "602 pages with scanned plates interleaved from page 8",
     ),
+    # The XBRL instance of the SAME filing as `hybrid_financial`, committed
+    # beside it. It ships as a zip, which is how filings actually arrive, so it
+    # exercises the archive selector and the XBRL reader together.
+    "xbrl_instance_zip": (
+        "investment/IDX_BBCA_Q1_2026_instance.zip",
+        "a real filing's tagged facts, inside the zip they are filed in",
+    ),
     # Non-PDF, for the readers that are not the PDF reader.
     "html_report": ("report/orca_report.html", "a real 3.9 MB HTML report"),
     "workbook": ("dataframe/Coffee_Shop_Sales.xlsx", "a real spreadsheet"),

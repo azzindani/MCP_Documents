@@ -265,6 +265,60 @@ PAGINATION=$(extract "$LAST_R" pagination)
   fail "pagination='$PAGINATION' for a .txt, expected 'synthetic'"
 
 echo
+echo "===== a bundle: the archive manifest, and the member inside it ====="
+# Only reachable from here. Reading a member EXTRACTS it into the container's
+# inbox as uid 999; a permissions or path fault there is invisible to pytest,
+# which runs as the owner on a host filesystem.
+docker exec "$CONTAINER" python3 -c "
+import zipfile
+with zipfile.ZipFile('$D/bundle.zip', 'w', zipfile.ZIP_DEFLATED) as z:
+    z.write('$HTML', 'report.html')
+    z.writestr('facts.xbrl', '''<?xml version=\"1.0\"?>
+<xbrl xmlns=\"http://www.xbrl.org/2003/instance\">
+  <context id=\"Q1\"><entity><identifier scheme=\"s\">ACME</identifier></entity>
+    <period><instant>2026-03-31</instant></period></context>
+  <unit id=\"u\"><measure>iso4217:IDR</measure></unit>
+  <Assets contextRef=\"Q1\" unitRef=\"u\" decimals=\"0\">1640830566000000</Assets>
+</xbrl>''')
+"
+run read probe "{\"source\":\"$D/bundle.zip\"}" "what is in this archive?"
+ZIP_FORMAT=$(extract "$LAST_R" format)
+[ "$ZIP_FORMAT" = "zip" ] &&
+  pass "an archive opens as itself, not as one of its members" ||
+  fail "format='$ZIP_FORMAT' for a .zip, expected 'zip'"
+echo "$LAST_R" | grep -q 'facts.xbrl' &&
+  pass "the manifest lists the members" ||
+  fail "probe of an archive did not list facts.xbrl"
+echo "$LAST_R" | grep -q 'open_with' &&
+  pass "the listing says how to open a member" ||
+  fail "no open_with in the listing -- a manifest with no way in is a dead end"
+
+run read probe "{\"source\":\"$D/bundle.zip::facts.xbrl\"}" "read the XBRL inside the bundle"
+MEMBER_FORMAT=$(extract "$LAST_R" format)
+[ "$MEMBER_FORMAT" = "xbrl" ] &&
+  pass "the member is read as an XBRL, not as an archive" ||
+  fail "format='$MEMBER_FORMAT' for a member, expected 'xbrl'"
+MEMBER_BASIS=$(extract "$LAST_R" basis)
+[ "$MEMBER_BASIS" = "native" ] &&
+  pass "tagged facts are reported native, not text_layer" ||
+  fail "basis='$MEMBER_BASIS' for tagged XBRL facts, expected 'native'"
+
+# The filed figure has to survive the round trip exactly. An instance states
+# full rupiah where the PDF beside it prints millions, and any rescaling here
+# would produce a number matching neither document.
+run read find "{\"source\":\"$D/bundle.zip::facts.xbrl\",\"query\":\"1640830566000000\"}" \
+  "find the filed figure in the member"
+MEMBER_HITS=$(extract_num "$LAST_R" hits)
+[ "${MEMBER_HITS:-0}" -ge 1 ] &&
+  pass "the filed value is returned exactly, unrescaled ($MEMBER_HITS hit)" ||
+  fail "the filed figure was not found in the member"
+
+expect read probe "{\"source\":\"$D/bundle.zip::../../etc/passwd\"}" "escape the archive"
+echo "$LAST_R" | grep -q 'safe member' &&
+  pass "a member path that walks upward is refused" ||
+  fail "a '..' member name was not refused"
+
+echo
 echo "===== docs-edit: the remaining 5 tools ====="
 run edit assemble "{\"sources\":[\"$PDF\",\"$PDF\"],\"select\":\"s0:all, s1:1r90\",\"out\":\"$D/merged.pdf\"}" \
   "merge the report with itself and rotate the first page of the copy"

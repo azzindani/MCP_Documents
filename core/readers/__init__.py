@@ -95,6 +95,15 @@ READERS = {
     ".eml": "eml",
     ".msg": "eml",
     ".epub": "epub",
+    # Tagged data rather than a rendered document: the only format here whose
+    # figures are stated by the filer instead of reconstructed from layout, so
+    # the only one that answers `native` about a number.
+    ".xbrl": "xbrl",
+    # A container, not a document. It opens as its manifest and a member is read
+    # as `archive.zip::member` -- see core/readers/archive.py. The zip-based
+    # document formats above are routed to their own readers by extension and
+    # never reach this one.
+    ".zip": "archive",
 }
 
 SUPPORTED = sorted(READERS)

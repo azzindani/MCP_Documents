@@ -216,6 +216,43 @@ def as_basis(value: str, fallback: Basis = "text_layer") -> Basis:
     return value if value in _BASES else fallback  # type: ignore[return-value]
 
 
+# Weakest claim to strongest. `empty` is absent deliberately: it is not a weak
+# basis, it is the absence of content, and every caller of weakest_basis()
+# decides separately whether there was anything at all.
+_BASIS_STRENGTH: tuple[str, ...] = (
+    "whitespace",  # inferred from column gaps       -- a guess about structure
+    "font_size",  # heading guessed from typography -- a guess about intent
+    "ocr",  # recognised from pixels
+    "text_layer",  # glyphs the file contains
+    "ruled",  # a grid the file draws
+    "tagged",  # the file's own structure tree
+    "native",  # the file declares this outright
+)
+
+
+def weakest_basis(values, fallback: Basis = "text_layer") -> Basis:
+    """The weakest basis among several, for a response that summarises many.
+
+    A response covering a page range, a set of tables or a whole document makes
+    ONE claim about all of it, so it has to make the claim that is true of the
+    worst piece. Reporting the strongest would tell a caller that a table
+    inferred from column gaps is as reliable as one the file declared.
+
+    Three tools each decided this for themselves and each got it wrong in a
+    different way. `extract` and `find` returned the constant `"text_layer"`,
+    which is a PDF's answer and wrong for the twelve formats that declare their
+    structure. `extract_tables` knew only two values -- it returned `"ruled"`
+    when every table was ruled and `"whitespace"` otherwise -- so a `native`
+    table from an HTML file, a worksheet or a set of tagged XBRL facts was
+    summarised as `whitespace`: the lowest confidence in the vocabulary,
+    attached to the one kind of table that involves no inference at all.
+    """
+    known = [v for v in values if v in _BASIS_STRENGTH]
+    if not known:
+        return fallback
+    return min(known, key=_BASIS_STRENGTH.index)  # type: ignore[return-value]
+
+
 def pages_of_kind(doc: Document, scanned: bool) -> list[int]:
     """Page numbers that are (or are not) scans, among the pages loaded."""
     return [p.number for p in doc.loaded_pages if p.is_scanned is scanned]
