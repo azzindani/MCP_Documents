@@ -141,7 +141,39 @@ Span` model in `core/ir.py`, and every tool operates on that.
 
 This is the decision that keeps the tool count at 13. Supporting a new format
 costs *one reader*, not five tools. PDF, HTML, docx/xlsx/pptx, .eml/.msg, .epub,
-plain text, markdown and CSV all enter the same way.
+.xbrl, .zip, plain text, markdown and CSV all enter the same way.
+
+**`.xbrl` is the one format whose figures are not reconstructed.** Every other
+reader recovers numbers from layout — glyph coordinates, ruling lines, column
+gaps — and reports `text_layer`, `ruled` or `whitespace` accordingly. An XBRL
+instance states its facts in machine-readable fields, so its reader answers
+`native`, and a caller comparing a figure from a filing's PDF against the same
+figure from its XBRL is told which is which. Values are reported **as filed and
+never rescaled**: an instance states full units where the PDF beside it prints
+millions, and converting here would produce a number matching neither document.
+
+**`.zip` is a container, not a document, and does not pretend to be one.**
+Members are *not* mapped onto pages — that would make `extract(pages='3-5')`
+return three filenames and call it text. An archive opens as its manifest, and
+a member is read by naming it:
+
+```
+probe("filing.zip")                    what is inside, and how to open it
+probe("filing.zip::instance.xbrl")     the member, read as an XBRL
+```
+
+The `::` selector is resolved in `core/paths.py::resolve_source`, the choke
+point **both tiers** share — the read tier alone is how `source=<url>` once
+worked in docs-edit and not in docs-read. `.docx`, `.xlsx`, `.pptx` and `.epub`
+are zips too and are deliberately *not* reachable this way: they have readers of
+their own, and reaching inside one would expose `word/document.xml` as though
+reading it were supported.
+
+**The bomb guard is a size, not a ratio** — measured, not reasoned about. Real
+XBRL archives in the corpus compress **6.9x to 31x** because XML packs
+extremely well, so the intuitive "over 10x is a bomb" rejects every genuine
+filing. The absolute expanded total is the guard; the ratio is a second
+tripwire at 200x.
 
 **The claim has to be enforced, not just stated.** It was untrue for two of the
 tools until the second reader existed: `_read_probe.py` imported
@@ -187,7 +219,8 @@ live: the number is right and the sentence taken from it is wrong.
 
 So every extraction carries **how it was obtained**, in the response:
 
-- `basis: "text_layer" | "ocr" | "ruled" | "whitespace" | "tagged"`
+- `basis: "text_layer" | "ocr" | "ruled" | "whitespace" | "tagged" | "native" |
+  "font_size" | "empty"`
 - `confidence` where the method has one (OCR score, table structure score)
 - per page where it varies — a hybrid PDF is born-digital on page 1 and a scan
   on page 40, and one number for the document would be a lie about both
@@ -195,6 +228,26 @@ So every extraction carries **how it was obtained**, in the response:
 A tool that says *"14 tables"* and a tool that says *"9 from ruling lines, 5
 inferred from column gaps, and page 22 is an un-OCR'd scan"* are different
 products. Build the second.
+
+**A response's `basis` is DERIVED, never a constant.** Four tools each hardcoded
+it and each was wrong in a different way, which is why this is a rule and not a
+convention:
+
+- `probe` returned `"text_layer" if digital else "empty"`, and `extract`
+  computed the same thing — the right answer for a PDF and wrong for all twelve
+  formats that declare their own structure and report `native`, a *stronger*
+  claim that was silently discarded.
+- `find` returned the literal `"text_layer"` for every format.
+- `extract_tables` summarised with `"ruled" if all ruled else "whitespace"` — it
+  knew two values. A declared table (an HTML `<table>`, a worksheet, an archive
+  manifest, tagged XBRL facts) fell into the else branch and was reported as
+  `whitespace`: the **lowest** confidence in the vocabulary, on the one kind of
+  table that involves no inference at all — while the tables inside that same
+  response said `basis: "native", confidence: 1.0`.
+
+Take the basis from the pages or items the response actually covers, via
+`core.ir.weakest_basis()`. A summary is a claim about *all* of them, so it
+reports the weakest — never the strongest, and never a constant.
 
 ### 4.5 Just-in-time, with one exception
 
@@ -551,7 +604,8 @@ of the server modules' AST and fails if one never appears in the smoke script.
 - [x] `core/ir.py`, `core/cache.py`, `core/paths.py`, `core/binaries.py`
 - [x] `readers/pdf.py` (pypdfium2 + pdfplumber)
 - [x] `html.py`, `text.py` (txt/md/csv/log), `office_docx.py`, `office_pptx.py`,
-      `office_xlsx.py`, `eml.py`, `epub.py` — 16 extensions, no new tool
+      `office_xlsx.py`, `eml.py`, `epub.py`, `xbrl.py`, `archive.py` — 18
+      extensions, no new tool
 - [x] `core/readers/_flow.py` — synthetic pagination for formats with no pages,
       at 2,800 chars (measured: median of 103 real pages across 25 documents)
 - [x] Reader protocol: `open_document` / `close_document` / `load_page` /

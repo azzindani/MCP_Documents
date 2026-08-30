@@ -17,6 +17,7 @@ import re
 
 from core import budget
 from core.formatter import fail, ok
+from core.ir import weakest_basis
 from core.readers import ReaderError, load_page, open_source
 from core.selection import SelectionError, format_pages, parse_pages
 from shared.progress import info, warn
@@ -103,7 +104,11 @@ def find(
     if hits > len(matches):
         result["truncated"] = True
         result["hint"] = f"{hits} matches, {len(matches)} returned. Narrow with pages=, or raise max_hits."
-    return ok(OP, result, progress, basis="text_layer")
+    # From the pages actually searched, not a constant. `text_layer` is a PDF's
+    # answer -- "glyphs the file contains" -- and was returned for every format,
+    # including the twelve that declare their structure and answer `native`.
+    searched = [doc.pages[n].basis for n in wanted if n in doc.pages]
+    return ok(OP, result, progress, basis=weakest_basis(searched) if hit_pages else "empty")
 
 
 def _describe(match: re.Match, text: str, page: int) -> dict:

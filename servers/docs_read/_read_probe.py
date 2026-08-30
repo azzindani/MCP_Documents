@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from core import budget
 from core.formatter import fail, ok
-from core.ir import Document, as_basis
+from core.ir import Basis, Document, as_basis
 from core.readers import (
     ReaderError,
     bookmarks,
@@ -185,7 +185,32 @@ def _describe(doc: Document, progress: list[dict]) -> dict:
     extras = capability(doc, "probe_extras")
     if extras:
         result["format_details"] = extras(doc)
-    return ok(OP, result, progress, basis="text_layer" if digital else "empty")
+    return ok(OP, result, progress, basis=_document_basis(doc, digital))
+
+
+def _document_basis(doc: Document, digital: list[int]) -> Basis:
+    """The basis the pages actually carry, not a constant.
+
+    This used to return `"text_layer"` for anything not entirely scanned, which
+    is right for a PDF and wrong for every other format here. `text_layer`
+    means "glyphs the file actually contains" -- the correct claim about a PDF,
+    whose paragraphs and tables are then RECONSTRUCTED from coordinates. HTML,
+    Word, slides, worksheets, email, epub and XBRL all declare their structure,
+    so their readers set `native`, a STRONGER claim. probe threw that away and
+    reported the weaker one for twelve formats.
+
+    It matters most for the format that led to finding it. An XBRL fact is a
+    number the filer tagged in a machine-readable field; reporting it under the
+    same basis as a figure recovered from glyph positions says the two are
+    equally reliable, and the entire purpose of this field is that they are not.
+
+    Same shape as `outline`'s: use what the pages agree on, and fall back to the
+    conservative answer where they disagree rather than picking a winner.
+    """
+    if not digital:
+        return "empty"
+    found = {doc.pages[number].basis for number in digital if number in doc.pages}
+    return as_basis(found.pop(), "text_layer") if len(found) == 1 else "text_layer"
 
 
 # A line must be this much larger than the body to be an inferred heading, and

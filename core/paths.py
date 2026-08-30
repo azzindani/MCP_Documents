@@ -31,10 +31,39 @@ class PathError(ValueError):
         self.hint = hint
 
 
+# Separates an archive from the member inside it: `filing.zip::instance.xbrl`.
+# Two colons rather than one because a Windows path starts `C:\` and a URL
+# contains `https://`, and a single colon would make both ambiguous.
+MEMBER_SEPARATOR = "::"
+
+# Only these are containers whose members can be named. `.docx`, `.xlsx`,
+# `.pptx` and `.epub` are zips too and are deliberately absent: they have
+# readers of their own, and letting a caller reach inside one would expose
+# `word/document.xml` as though reading it were a supported thing to do.
+ARCHIVE_SUFFIXES = {".zip"}
+
+
 def resolve_source(raw: str) -> Path:
-    """A readable input path. Fetches a URL when that is enabled."""
+    """A readable input path. Fetches a URL when that is enabled.
+
+    Also resolves an archive member: `filing.zip::instance.xbrl` extracts that
+    member and returns ITS path, so every tool above reads it as whatever
+    format it is, with no per-tool code and no new argument on thirteen tools.
+
+    Here, rather than in the read tier's own resolver, because both tiers call
+    this one. Putting URL fetching in the read tier alone is exactly how
+    `convert(source=<url>)` worked while `probe(source=<url>)` did not, and the
+    fix for that defect is the reason this choke point exists to hold this.
+    """
     if not raw or not raw.strip():
         raise PathError("No source given.", "Pass a file path, or a URL if MCP_FETCH_URLS=1 is set.")
+    archive, separator, member = raw.strip().partition(MEMBER_SEPARATOR)
+    # The separator counts ONLY when what precedes it is an archive. Not merely
+    # tidy: `http://[::1]/report.pdf` contains a bare `::`, and splitting on it
+    # would turn an SSRF probe the guard is meant to refuse into a nonsense
+    # member lookup that never reaches the guard at all.
+    if separator and Path(archive).suffix.lower() in ARCHIVE_SUFFIXES:
+        return _resolve_member(archive, member)
     if is_url(raw):
         if not url_fetch_enabled():
             raise PathError(
@@ -60,6 +89,70 @@ def resolve_source(raw: str) -> Path:
     if path.is_dir():
         raise PathError(f"{raw!r} is a directory, not a document.", "Pass the path of a single file.")
     return path
+
+
+def _resolve_member(archive: str, member: str) -> Path:
+    """Extract one member of an archive and return the path it was written to.
+
+    Into the inbox, which is already where this server puts material it pulled
+    in from somewhere else (a fetched URL lands there too), so an extracted
+    member inherits that directory's lifecycle instead of inventing a second
+    one. The name carries the archive's stem, its mtime and its size, so a
+    re-packed archive re-extracts rather than serving a stale member -- the
+    same reasoning as the reader cache key, which this then keys off.
+
+    The member keeps its own suffix, which is the whole trick: `reader_for`
+    dispatches on the returned path, so `filing.zip::instance.xbrl` is read by
+    the XBRL reader with no archive-specific code anywhere above this line.
+    """
+    import zipfile
+
+    from shared.exchange import get_inbox_dir
+
+    if not member.strip():
+        raise PathError(
+            f"No member named in {archive + MEMBER_SEPARATOR!r}.",
+            f"Name one after '{MEMBER_SEPARATOR}', or probe('{archive}') to list them.",
+        )
+
+    from core import budget
+    from core.readers import ReaderError
+    from core.readers.archive import safe_member
+
+    source = resolve_source(archive)
+    stat = source.stat()
+    ceiling = budget.max_source_bytes()
+    try:
+        with zipfile.ZipFile(source) as zf:
+            info = safe_member(zf, member.strip(), source.name)
+            if info.file_size > ceiling:
+                raise PathError(
+                    f"{info.filename!r} is {info.file_size / 1_048_576:.1f} MB, "
+                    f"over the {ceiling / 1_048_576:.0f} MB limit.",
+                    "Extract it outside this server and pass its path.",
+                )
+            target = get_inbox_dir() / f"{source.stem}-{int(stat.st_mtime)}-{stat.st_size}-{Path(info.filename).name}"
+            if not target.exists() or target.stat().st_size != info.file_size:
+                with zf.open(info) as handle:
+                    # Bounded by the size check above, so a lying central
+                    # directory header cannot talk this into writing more than
+                    # the ceiling.
+                    target.write_bytes(handle.read(ceiling + 1))
+            apply_default_mode(target)
+    except zipfile.BadZipFile as exc:
+        raise PathError(
+            f"{source.name} is not a readable zip archive.",
+            "The file may be truncated or encrypted. Check it opens in an archive tool.",
+        ) from exc
+    except ReaderError as exc:
+        # `safe_member` speaks the readers' error type, and this function is
+        # called from BOTH tiers. The edit tier catches PathError and not
+        # ReaderError, so an unsafe member name would raise straight through
+        # the tool layer there while answering politely in the read tier --
+        # the same split that once let a blocked URL escape as a ValueError.
+        # Translated here; core.readers.resolve turns it back on the way out.
+        raise PathError(str(exc), exc.hint) from exc
+    return target
 
 
 def _fetch_hint(message: str) -> str:

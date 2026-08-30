@@ -44,9 +44,18 @@ OCR, protect, redact.
 
 **Any document, not just PDF.** One reader per format normalising into a single
 internal model, so every tool works the same on PDF, HTML, `.docx`, `.xlsx`,
-`.pptx`, `.eml`, `.epub`, markdown and plain text. With URL fetching enabled,
-every path argument also accepts a link — the same call, whether the HTML came
-from disk or the web.
+`.pptx`, `.eml`, `.epub`, `.xbrl`, markdown and plain text. With URL fetching
+enabled, every path argument also accepts a link — the same call, whether the
+HTML came from disk or the web.
+
+**Bundles open too.** A `.zip` reads as its manifest, and a member is read by
+naming it — `probe("filing.zip::instance.xbrl")` — so a filing that arrives as
+an archive does not have to be unpacked by hand first.
+
+**XBRL figures come back `native`.** Every other format's numbers are recovered
+from layout and carry a confidence to match; an XBRL instance states its facts
+in machine-readable fields, and the response says so. Values are reported
+exactly as filed and never rescaled.
 
 ---
 

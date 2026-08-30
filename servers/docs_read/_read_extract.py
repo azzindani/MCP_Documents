@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from core import budget, clean, order
 from core.formatter import fail, ok, refuse
+from core.ir import weakest_basis
 from core.readers import ReaderError, load_page, load_page_words, open_source, page_tables
 from core.selection import SelectionError, format_pages, parse_pages
 from shared.progress import info, warn
@@ -93,7 +94,12 @@ def extract(
         result["note"] = f"{tabular} page(s) look like tables; extract_tables() reads them as rows"
     if cleaned:
         result["cleaned"] = cleaned
-    basis = "empty" if len(scanned) == len(wanted) else "text_layer"
+    # From the pages that yielded text, not a constant. The constant was
+    # `text_layer`, which is a PDF's answer and wrong for every format that
+    # declares its own structure -- HTML, Word, slides, worksheets, email, epub
+    # and XBRL all report `native`, a stronger claim, and this threw it away.
+    read_pages = [doc.pages[n].basis for n in wanted if n not in scanned and n in doc.pages]
+    basis = "empty" if len(scanned) == len(wanted) else weakest_basis(read_pages)
     return ok(op, result, progress, basis=basis)
 
 
@@ -148,8 +154,18 @@ def extract_tables(
         "pages": format_pages(wanted),
     }
     # One basis for the whole response would be a lie whenever a range holds
-    # both kinds, so the per-table basis is authoritative and this summarises.
-    basis = "ruled" if by_basis.get("ruled") and not by_basis.get("whitespace") else "whitespace"
+    # more than one kind, so the per-table basis is authoritative and this
+    # summarises by taking the WEAKEST -- the claim that is true of every table
+    # in the set.
+    #
+    # This knew only two values. It answered `ruled` when every table was ruled
+    # and `whitespace` for anything else, so a table a format DECLARES -- an
+    # HTML <table>, a worksheet, an archive manifest, a set of tagged XBRL
+    # facts -- was summarised as `whitespace`, the lowest confidence in the
+    # vocabulary, on the one kind of table that involves no inference at all.
+    # The tables themselves said `native` with confidence 1.0 in the same
+    # response, so the summary contradicted its own contents.
+    basis = weakest_basis((t["basis"] for t in kept), fallback="whitespace")
     return ok(op, result, progress, basis=basis if kept else "empty")
 
 
