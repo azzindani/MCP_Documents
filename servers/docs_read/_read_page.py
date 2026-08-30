@@ -107,10 +107,32 @@ def to_markdown(source: str, pages: str = "", password: str = "") -> dict:
     # on the finished text does not work: clean.py normalises whitespace, so the
     # tab-separated flattening the block was keyed on no longer appears in it
     # and every table silently fell through to its flattened form.
+    #
+    # A PDF declares nothing, so for two rounds this function rendered no PDF
+    # table at all and reported `tables: 0` for a page that is nothing but a
+    # balance sheet -- while `extract_tables` and `read_page`, asked about the
+    # same page in the same session, each returned one. Measured: 21 of 21
+    # sampled pages of a bank filing. The control that shows the field means
+    # what it says elsewhere is HTML and XLSX, where the two tools agree
+    # exactly. A caller who converts a statement and reads `tables: 0`
+    # concludes there is nothing to extract.
+    #
+    # `ruled` tables are spliced in below, because the file itself drew the
+    # grid. `whitespace` ones are NOT: their shape is inferred from column
+    # gaps at 0.5 confidence, and a markdown pipe table is an assertion that
+    # the grid is real. They are counted and named instead, which is the same
+    # distinction the rest of this module makes between a fact and a guess.
+    reconstructed = _reconstructed_tables(doc, wanted)
     tables_rendered = 0
+    tables_left_as_text = 0
     for number in wanted:
         loaded = load_page_words(doc, number)
         blocks = order.order_blocks(loaded, order.detect_columns(loaded))
+        for entry in reconstructed.get(number, []):
+            spliced = blocks if not _worth_rendering(entry) else _splice_table(blocks, entry)
+            if spliced is blocks:
+                tables_left_as_text += 1
+            blocks = spliced
         declared_tables = {item.text.strip(): item.rows for item in blocks if item.kind == "table" and item.rows}
         rendered: list[tuple[str, float]] = []
         for line, size in order.lines_with_size(blocks):
@@ -152,6 +174,26 @@ def to_markdown(source: str, pages: str = "", password: str = "") -> dict:
         "tables": tables_rendered,
         "cleaned": cleaned,
     }
+    # Only when there is something to disclose, and never as a bare zero --
+    # `tables_left_as_text: 0` on a page with no tables at all would read as a
+    # different claim from the same silence.
+    # A note, and deliberately NOT a second count. The first version of this
+    # reported `tables_left_as_text`, and measuring it killed it: pdfplumber's
+    # text strategy proposes a grid for essentially EVERY page, so a six-page
+    # prose document came back claiming six tables. Worse, the proposal cannot
+    # be filtered by shape -- on this corpus a page of plain prose scores 100%
+    # of rows holding two or more cells and a real consolidated balance sheet
+    # scores 81%, so any threshold rates the prose as the more table-like of
+    # the two. There is no honest count of "tables present" in a PDF, which is
+    # the whole reason `basis` and `confidence` exist. Fixing an under-claim
+    # with an over-claim is not a fix.
+    if tables_left_as_text:
+        result["tables_note"] = (
+            "This format has no tables of its own; they are reconstructed, so `tables` counts the ones "
+            "rendered here -- those the file rules a grid around. Others were left as text rather than "
+            f"asserted as a grid. extract_tables(pages='{format_pages(wanted)}') returns every "
+            "reconstruction with its basis and confidence."
+        )
     # `native` where the document declared its own structure, `font_size` where
     # the headings were inferred from type. Reporting the second for the first
     # would throw away the difference between a fact and a guess -- outline()
@@ -217,6 +259,81 @@ def _mark_headings(text: str, size_of: dict[str, float], declared: dict[str, int
         else:
             out.append(line)
     return "\n".join(out), used_declared
+
+
+def _reconstructed_tables(doc, wanted: list[int]) -> dict[int, list[dict]]:
+    """Tables this page's FORMAT does not declare, grouped by page.
+
+    Only the ones a reader had to reconstruct. A format that declares its
+    tables already carries them as blocks with `rows`, and counting those here
+    would report every HTML table twice -- once as rendered and once as
+    outstanding.
+    """
+    out: dict[int, list[dict]] = {}
+    for entry in page_tables(doc, wanted):
+        if entry.get("basis") in {"ruled", "whitespace"} and entry.get("rows"):
+            out.setdefault(int(entry["page"]), []).append(entry)
+    return out
+
+
+def _worth_rendering(entry: dict) -> bool:
+    """Whether this reconstruction should become a markdown table.
+
+    Two conditions, and both were learned by rendering the result and reading
+    it rather than by reasoning about the code.
+
+    `ruled` only. A `whitespace` shape is inferred from column gaps at 0.5
+    confidence, and a pipe table is an assertion that the grid is real -- the
+    one thing this module refuses to do everywhere else.
+
+    And a real grid, not a frame. pdfplumber's line strategy calls the two
+    ruled boxes on a filing's COVER page a 2x1 table, and rendering that turned
+    a perfectly readable title page into a one-column markdown table holding
+    two paragraphs. A single row or a single column carries no structure that
+    plain text does not already carry, so rendering it only costs the line
+    breaks.
+    """
+    rows = entry.get("rows") or []
+    return entry.get("basis") == "ruled" and len(rows) >= 2 and max((len(r) for r in rows), default=0) >= 2
+
+
+def _splice_table(blocks: list, entry: dict) -> list:
+    """Replace the word blocks a table covers with the table itself.
+
+    The blocks a PDF page yields are words at coordinates; a table found in it
+    is a grid over the same words. Rendering both would print every cell twice,
+    once inside the table and once as loose text around it, so the words inside
+    the table's bounding box come out and one `table` block goes in where the
+    first of them was -- which keeps the reading order that `order_blocks` just
+    worked out, rather than appending the table at the end of the page.
+
+    The synthetic block is a real `Block` with `rows`, so everything downstream
+    treats it exactly like a docx `w:tbl`. No second mechanism.
+    """
+    from core.ir import Block, Span
+
+    box = entry.get("bbox")
+    if not box:
+        return blocks
+    x0, top, x1, bottom = box
+    kept: list = []
+    first_inside: int | None = None
+    for block in blocks:
+        bbox = block.bbox
+        if bbox and x0 <= (bbox[0] + bbox[2]) / 2 <= x1 and top <= (bbox[1] + bbox[3]) / 2 <= bottom:
+            if first_inside is None:
+                first_inside = len(kept)
+            continue
+        kept.append(block)
+    if first_inside is None:
+        return blocks
+    rows = entry["rows"]
+    flat = " ".join(c for row in rows for c in row if c)
+    kept.insert(
+        first_inside,
+        Block(kind="table", spans=[Span(text=flat)], bbox=(x0, top, x1, bottom), rows=rows, basis="ruled"),
+    )
+    return kept
 
 
 def _markdown_table(rows: list[list[str]]) -> str:
