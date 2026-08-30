@@ -23,10 +23,20 @@ from pathlib import Path
 CORPUS = Path(__file__).parent / "corpus"
 
 
+# Fixtures already built by THIS process -- see the same note in build.py.
+# Several test modules each declare their own session-scoped `formats` fixture,
+# so build_all() runs once per module, and rewriting a file an earlier test
+# still has open is a PermissionError on Windows and silent on POSIX.
+_BUILT: dict[str, Path] = {}
+
+
 def _write(name: str, text: str) -> Path:
+    if name in _BUILT:
+        return _BUILT[name]
     CORPUS.mkdir(parents=True, exist_ok=True)
     path = CORPUS / name
     path.write_text(text, encoding="utf-8")
+    _BUILT[name] = path
     return path
 
 
@@ -220,6 +230,8 @@ def report_docx(name: str = "report.docx") -> Path:
     two flat lists, and reading them in that order puts every table at the end
     of the document -- a plausible, readable, wrongly-ordered result.
     """
+    if name in _BUILT:
+        return _BUILT[name]
     import docx
 
     document = docx.Document()
@@ -235,6 +247,7 @@ def report_docx(name: str = "report.docx") -> Path:
     CORPUS.mkdir(parents=True, exist_ok=True)
     path = CORPUS / name
     document.save(str(path))
+    _BUILT[name] = path
     return path
 
 
@@ -245,6 +258,8 @@ def deck_pptx(name: str = "deck.pptx") -> Path:
     visual order disagree -- a reader sorting by shape index reads the body
     first.
     """
+    if name in _BUILT:
+        return _BUILT[name]
     from pptx import Presentation
     from pptx.util import Inches, Pt
 
@@ -277,6 +292,7 @@ def deck_pptx(name: str = "deck.pptx") -> Path:
     CORPUS.mkdir(parents=True, exist_ok=True)
     path = CORPUS / name
     prs.save(str(path))
+    _BUILT[name] = path
     return path
 
 
@@ -287,6 +303,8 @@ def book_xlsx(name: str = "book.xlsx") -> Path:
     so a reader trusting the sheet dimensions reports a document 100x its real
     size.
     """
+    if name in _BUILT:
+        return _BUILT[name]
     import openpyxl
 
     book = openpyxl.Workbook()
@@ -312,6 +330,7 @@ def book_xlsx(name: str = "book.xlsx") -> Path:
     CORPUS.mkdir(parents=True, exist_ok=True)
     path = CORPUS / name
     book.save(str(path))
+    _BUILT[name] = path
     return path
 
 
@@ -322,6 +341,8 @@ def book_epub(name: str = "book.epub") -> Path:
     spine. A reader using the manifest, the archive order, or an alphabetical
     sort gets a plausible book with its chapters shuffled.
     """
+    if name in _BUILT:
+        return _BUILT[name]
     import zipfile
 
     CORPUS.mkdir(parents=True, exist_ok=True)
@@ -384,8 +405,19 @@ BUILDERS = {
 }
 
 
+_ALL: dict[str, Path] = {}
+
+
 def build_all() -> dict[str, Path]:
-    return {name: fn() for name, fn in BUILDERS.items()}
+    """Every non-PDF fixture, built once per process.
+
+    Memoised for the same reason _write is: two modules asking for these
+    independently must not rewrite files the first module's tests still hold
+    open through the reader LRU.
+    """
+    if not _ALL:
+        _ALL.update({name: fn() for name, fn in BUILDERS.items()})
+    return dict(_ALL)
 
 
 if __name__ == "__main__":

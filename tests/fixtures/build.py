@@ -92,10 +92,26 @@ def _page(pdf: pikepdf.Pdf, *streams: bytes) -> pikepdf.Page:
     )
 
 
+# Fixtures already written by THIS process. Several test modules each declare
+# their own session-scoped `corpus` fixture, so build_all() runs once per module
+# rather than once per session -- and rebuilding a file an earlier test still
+# has open through the reader LRU is a PermissionError on Windows, where
+# pikepdf's write-temp-then-rename cannot replace an open file. POSIX allows it
+# silently, so the whole suite passed here and failed on every Windows runner.
+#
+# Memoised per process, not "skip if the file exists": a stale fixture left by
+# an older version of a builder is exactly the kind of thing that makes a test
+# pass for the wrong reason, and a fresh process must always rebuild.
+_WRITTEN: dict[str, Path] = {}
+
+
 def _save(pdf: pikepdf.Pdf, name: str) -> Path:
+    if name in _WRITTEN:
+        return _WRITTEN[name]
     CORPUS.mkdir(parents=True, exist_ok=True)
     path = CORPUS / name
     pdf.save(path)
+    _WRITTEN[name] = path
     return path
 
 
@@ -263,11 +279,14 @@ def large(pages: int = 500, name: str = "large.pdf") -> Path:
 
 def encrypted(password: str = "secret", name: str = "encrypted.pdf") -> Path:
     """Opens only with the password. probe() must say so instead of failing."""
+    if name in _WRITTEN:
+        return _WRITTEN[name]
     pdf = pikepdf.Pdf.new()
     pdf.pages.append(_page(pdf, _text_ops([(72.0, 100.0, "Locked content.", 12.0)])))
     CORPUS.mkdir(parents=True, exist_ok=True)
     path = CORPUS / name
     pdf.save(path, encryption=pikepdf.Encryption(owner=password, user=password, R=6))
+    _WRITTEN[name] = path
     return path
 
 
@@ -293,6 +312,8 @@ def damaged(name: str = "damaged.pdf") -> Path:
     what optimize(action="repair") means here: the fast path (pdfium) refuses,
     QPDF recovers what is left. Both pages survive; the tail does not.
     """
+    if name in _WRITTEN:
+        return _WRITTEN[name]
     pdf = pikepdf.Pdf.new()
     for n in (1, 2):
         body = [(72.0, 100.0 + i * 16, f"Page {n} line {i + 1} of a file about to be broken.", 11.0) for i in range(20)]
@@ -302,6 +323,7 @@ def damaged(name: str = "damaged.pdf") -> Path:
     pdf.save(path)
     raw = path.read_bytes()
     path.write_bytes(raw[: int(len(raw) * 0.85)])
+    _WRITTEN[name] = path
     return path
 
 
