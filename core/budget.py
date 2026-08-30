@@ -195,6 +195,22 @@ def flow_chars_per_page() -> int:
     return int(os.environ.get("DOCS_FLOW_CHARS_PER_PAGE", "2800"))
 
 
+def regex_seconds() -> float:
+    """How long one caller-supplied regular expression may run.
+
+    Measured, and the headroom is the point. Ten patterns a caller might
+    plausibly run over a 183-page filing were timed across all of it: nine
+    finished in under 0.04s, and the worst -- a two-named-group parser -- took
+    0.324s. A leading-`.*` pattern took 0.287s. So 10s is roughly thirty times
+    the worst real case, while `(\\s*\\w+)+$` on a single page of that document
+    was still running when it was killed at 120 seconds.
+
+    A guard set anywhere near the real work would break the real work; a guard
+    set here cannot be reached by anything that finishes at all.
+    """
+    return float(os.environ.get("DOCS_REGEX_SECONDS", "5" if constrained() else "10"))
+
+
 def max_table_pages() -> int:
     """Pages one extract_tables call may scan.
 

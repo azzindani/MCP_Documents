@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import re
 
-from core import budget
-from core.formatter import fail, ok
+from core import budget, scan
+from core.formatter import fail, ok, refuse
 from core.ir import weakest_basis
 from core.readers import ReaderError, load_page, open_source
 from core.selection import SelectionError, format_pages, parse_pages
@@ -61,25 +61,39 @@ def find(
         return fail(OP, str(exc), exc.hint, progress)
 
     ceiling = min(max_hits, budget.max_response_tokens() // 20)
-    matches: list[dict] = []
-    hits = 0
-    hit_pages: list[int] = []
     scanned_without_text = 0
-
+    searchable: list[int] = []
+    texts: list[str] = []
     for number in wanted:
         page = load_page(doc, number)
         if page.is_scanned:
             scanned_without_text += 1
             continue
-        text = page.text
-        page_had_hit = False
-        for match in pattern.finditer(text):
-            hits += 1
-            page_had_hit = True
-            if len(matches) < ceiling:
-                matches.append(_describe(match, text, number))
-        if page_had_hit:
-            hit_pages.append(number)
+        searchable.append(number)
+        texts.append(page.text)
+
+    # A pattern the CALLER wrote runs in a child process that can be killed.
+    # `re` has no timeout and no step limit, and `(\s*\w+)+$` against one page
+    # of this corpus was still backtracking when it was killed at 120 seconds
+    # -- on a deployed server, a worker that never comes back, with nothing in
+    # the response or the log to say why. A literal query has been through
+    # re.escape, holds no quantifier, and stays in-process. See core/scan.py.
+    try:
+        hits, raw, where = scan.matches_of(texts, pattern.pattern, pattern.flags, ceiling, guarded=regex)
+    except scan.ScanTimeout as exc:
+        return refuse(
+            OP,
+            f"The pattern {query!r} did not finish within {exc.seconds:g}s.",
+            "A quantifier inside a quantifier -- (a+)+ , (\\s*\\w+)+ -- backtracks without finishing. "
+            "Give the inner part a fixed width, anchor the pattern, or narrow the search with pages=. "
+            "A literal search (regex=False) is never affected.",
+            limit=f"{exc.seconds:g}s",
+            seen=f"{len(texts)} page(s)",
+            progress=progress,
+        )
+
+    hit_pages = [searchable[index] for index in where]
+    matches = [_describe(texts[index], start, end, groups, searchable[index]) for index, start, end, groups in raw]
 
     progress.append(info(f"searched {len(wanted)} page(s)"))
     if scanned_without_text:
@@ -103,16 +117,34 @@ def find(
     # between "47 hits, here are 47" and "4,000 hits, narrow it down".
     if hits > len(matches):
         result["truncated"] = True
-        result["hint"] = f"{hits} matches, {len(matches)} returned. Narrow with pages=, or raise max_hits."
+        result["returned_limit"] = ceiling
+        # Which of the two limits actually bit. `ceiling` is min(max_hits, what
+        # the response budget affords), so past that point raising max_hits
+        # changes nothing -- and the hint said to raise it anyway. Asked for
+        # 500, 5,000 and 50,000 on a query with 2,360 hits, this returned 400
+        # every time and told the caller to ask for more each time.
+        if ceiling < max_hits:
+            result["hint"] = (
+                f"{hits} matches, {ceiling} returned -- the response budget caps this call at {ceiling}, "
+                f"so a larger max_hits returns no more. Narrow with pages=, or make the query more specific."
+            )
+        else:
+            result["hint"] = f"{hits} matches, {len(matches)} returned. Narrow with pages=, or raise max_hits."
     # From the pages actually searched, not a constant. `text_layer` is a PDF's
     # answer -- "glyphs the file contains" -- and was returned for every format,
     # including the twelve that declare their structure and answer `native`.
-    searched = [doc.pages[n].basis for n in wanted if n in doc.pages]
-    return ok(OP, result, progress, basis=weakest_basis(searched) if hit_pages else "empty")
+    #
+    # And from the pages, NOT from whether anything matched. `basis` says how
+    # the text this tool read was obtained; finding no match is a fact about
+    # the query, not about the document. Reporting `empty` -- "nothing here to
+    # obtain", the only basis worth 0.0 confidence -- for a fruitless search of
+    # a 183-page born-digital filing contradicted probe() on the same file in
+    # the same session.
+    searched = [doc.pages[n].basis for n in searchable if n in doc.pages]
+    return ok(OP, result, progress, basis=weakest_basis(searched, fallback="empty"))
 
 
-def _describe(match: re.Match, text: str, page: int) -> dict:
-    start, end = match.span()
+def _describe(text: str, start: int, end: int, groups: dict, page: int) -> dict:
     left = max(0, start - SNIPPET_CONTEXT)
     right = min(len(text), end + SNIPPET_CONTEXT)
     snippet = text[left:right].replace("\n", " ").strip()
@@ -124,7 +156,6 @@ def _describe(match: re.Match, text: str, page: int) -> dict:
     # Named groups are the custom-parsing path: one pattern over 300 pages
     # returns rows rather than prose. Only named ones -- numbered groups are
     # positional noise in a JSON response.
-    groups = {name: value for name, value in (match.groupdict() or {}).items() if value is not None}
     if groups:
         entry["groups"] = groups
     return entry
