@@ -66,6 +66,29 @@ def ocr_seconds_per_page() -> float:
     return float(os.environ.get("DOCS_OCR_SECONDS_PER_PAGE", "2.0"))
 
 
+def ocr_page_timeout() -> float:
+    """How long ONE page's Tesseract call may take before being killed.
+
+    Deliberately separate from max_ocr_seconds(), which bounds how many pages a
+    call will ACCEPT. Using one number for both looked tidy and was wrong: under
+    MCP_CONSTRAINED_MODE=1 the whole-job ceiling is 60s, and the very first OCR
+    in a fresh process takes about 114 seconds for a page that then takes 4 --
+    the render and recognition stacks both initialise lazily. So a single-page
+    job, comfortably inside its own budget, was killed by the timeout meant for
+    a hundred-page one.
+
+    The floor of 120s exists for that cold start and does not shrink in
+    constrained mode, because a cold start is a cold start regardless of how
+    much work the caller is allowed to ask for.
+
+    Overridable, because the right number is a property of the machine rather
+    than of this code: the same page took 4 seconds on an idle box and timed
+    out at 120 on one under a load average of 10. A test asserting OCR quality
+    should pin this rather than inherit whatever the host is doing at the time.
+    """
+    return float(os.environ.get("DOCS_OCR_PAGE_TIMEOUT", "0")) or max(120.0, max_ocr_seconds())
+
+
 def estimate_tokens(text: str) -> int:
     return len(text) // CHARS_PER_TOKEN
 
