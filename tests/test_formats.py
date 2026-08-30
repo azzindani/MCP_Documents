@@ -500,6 +500,42 @@ def test_pdf_only_tools_refuse_another_format_with_a_next_step(formats, call):
     assert isinstance(payload["token_estimate"], int)
 
 
+def test_the_format_refusal_does_not_depend_on_what_is_installed(formats, monkeypatch):
+    """ocr() checked for Tesseract BEFORE it looked at its argument.
+
+    So on a machine without it, ocr(an HTML file) answered "install
+    tesseract-ocr": the caller fetches a 400 MB package, runs it again, and
+    only then learns this tool takes PDFs. The hint must name what actually
+    went wrong, and "that is the wrong format" is true either way.
+
+    The binary is stubbed absent rather than left to the host, because the host
+    that found this was CI while every machine this was written on has
+    Tesseract -- a test that can only fail on one of the two is a test that
+    gets pushed.
+    """
+    from core import binaries
+    from servers.docs_edit import engine as edit_engine
+
+    monkeypatch.setattr(binaries, "which", lambda name: None)
+    payload = edit_engine.ocr(str(formats["article_html"]))
+    assert not payload["success"], payload
+    assert "convert" in payload["hint"], payload["hint"]
+    assert "tesseract" not in payload["hint"].lower()
+
+
+def test_a_real_pdf_still_reports_a_missing_binary(monkeypatch, tmp_path):
+    """The other half: given a valid argument, the environment IS the problem."""
+    from core import binaries
+    from servers.docs_edit import engine as edit_engine
+    from tests.fixtures import build
+
+    monkeypatch.setattr(binaries, "which", lambda name: None)
+    payload = edit_engine.ocr(str(build.born_digital()), out=str(tmp_path / "o.pdf"))
+    assert not payload["success"], payload
+    assert "tesseract" in payload["hint"].lower()
+    assert payload["available"] is False
+
+
 @pytest.mark.parametrize("name", ["article_html", "report_docx", "book_epub", "message_eml", "readme_md"])
 def test_convert_to_text_works_for_every_readable_format(formats, tmp_path, name):
     """convert() goes through the reader layer, so it is not PDF-only.

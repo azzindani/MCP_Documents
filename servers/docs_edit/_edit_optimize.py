@@ -128,16 +128,23 @@ def ocr(source: str, pages: str = "", language: str = "eng", out: str = "") -> d
     op = "ocr"
     progress: list[dict] = []
 
-    if not binaries.available("tesseract"):
-        error, hint = binaries.missing_reason("tesseract")
-        return fail(op, error, hint, progress, available=False)
-
+    # The ARGUMENT is checked before the environment, and the order matters.
+    # Checked the other way round, ocr() on an HTML file answered "install
+    # tesseract-ocr" on any machine without Tesseract -- so the caller installs
+    # a 400 MB package, runs it again, and only then learns the real problem is
+    # that this tool takes PDFs. The hint must name what actually went wrong,
+    # and "your argument is the wrong format" is true regardless of what is
+    # installed. Found by CI, which is the only place here without Tesseract.
     try:
         src = resolve_source(source)
         require_pdf(src, op)
         destination = resolve_out(out, src)
     except PathError as exc:
         return fail(op, str(exc), exc.hint, progress)
+
+    if not binaries.available("tesseract"):
+        error, hint = binaries.missing_reason("tesseract")
+        return fail(op, error, hint, progress, available=False)
 
     from core.readers import ReaderError, load_page, open_source
 
