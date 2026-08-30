@@ -94,7 +94,7 @@ def ocr(source: str, pages: str = "", language: str = "eng", out: str = "") -> d
 
 @mcp.tool(annotations=EDITS)
 def protect(source: str, action: str, password: str = "", out: str = "") -> dict:
-    """Encrypt, decrypt or set permissions on a PDF you have the password for."""
+    """Encrypt, decrypt, or clear a PDF's permission flags. Needs a password."""
     return engine.protect(source, action, password, out)
 
 
