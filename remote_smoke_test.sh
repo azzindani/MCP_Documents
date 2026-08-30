@@ -231,6 +231,33 @@ HITS=$(extract_num "$LAST_R" hits)
   pass "find located $HITS occurrence(s) of a phrase that is really there" ||
   fail "find reported $HITS hits for text the document contains"
 
+# A search that MISSES is a claim too. It used to answer basis "empty" -- the
+# only basis worth 0.0 confidence, defined as "nothing here to obtain" -- about
+# a document this server had just read in full.
+run read find "{\"source\":\"$PDF\",\"query\":\"Wakanda Interbank Settlement\"}" "search for something that is not there"
+MISS_BASIS=$(extract "$LAST_R" basis)
+[ "$MISS_BASIS" != "empty" ] && [ -n "$MISS_BASIS" ] &&
+  pass "a fruitless search does not call the document empty (basis=$MISS_BASIS)" ||
+  fail "basis='$MISS_BASIS' for a miss in a document with a full text layer"
+
+# `re` has no timeout. This pattern backtracks for longer than the universe,
+# and before the guard the request never came back at all -- so the assertion
+# that matters here is simply that there IS a response. Deployment-level,
+# because the guard starts a child process and a container is where that has to
+# work.
+echo "== prompt: \"find (\\s*\\w+)+\$ as a regex\" -> find =="
+N=$((N + 1))
+R=$(call read "$N" find "{\"source\":\"$PDF\",\"query\":\"(\\\\s*\\\\w+)+$\",\"regex\":true}")
+if [ -z "$R" ]; then
+  fail "a runaway regex returned nothing at all -- the worker did not come back"
+elif ok_json "$R"; then
+  pass "the pattern completed inside the deadline on this document"
+elif echo "$R" | grep -q "quantifier"; then
+  pass "a runaway regex is refused with a hint naming the cause, not left running"
+else
+  fail "a runaway regex produced neither an answer nor a usable refusal"
+fi
+
 run read extract "{\"source\":\"$PDF\"}" "read the report"
 has_text "$LAST_R" "APAC led growth" &&
   pass "extract returned the seeded sentence, not an empty string" ||
@@ -374,6 +401,31 @@ else
   pass "an encrypted document is refused without its password"
 fi
 run read probe "{\"source\":\"$D/locked.pdf\",\"password\":\"smoke-pw\"}" "read it with the password"
+# What the encrypted file still forbids, read back off the disk. Encrypting
+# used to leave `modify_assembly` withdrawn -- from the caller holding the
+# password -- because pikepdf.Permissions() is a set of defaults, not an empty
+# set, and nothing in the response said so either way.
+R=$(call edit "$((N + 1))" protect "{\"source\":\"$PDF\",\"action\":\"encrypt\",\"password\":\"smoke-pw\",\"out\":\"$D/locked2.pdf\"}")
+N=$((N + 1))
+echo "$R" | grep -qE '\\?"restrictions\\?"[[:space:]]*:[[:space:]]*\[[[:space:]]*\]' &&
+  pass "the encrypted file forbids nothing the caller did not ask to forbid" ||
+  fail "protect(encrypt) left a restriction in place, or did not report the flags at all"
+
+# Permission flags live inside the encryption, so changing them means
+# re-encrypting. Without a password this fell through to writing the file with
+# NO encryption at all -- success, action "permissions", and a document anyone
+# opens -- so the refusal is the fix, and it has to hold over HTTP too.
+echo "== prompt: \"clear the permission flags\" (no password) -> protect =="
+N=$((N + 1))
+R=$(call edit "$N" protect "{\"source\":\"$D/locked.pdf\",\"action\":\"permissions\",\"out\":\"$D/unlocked.pdf\"}")
+if ok_json "$R"; then
+  fail "protect(permissions) with no password succeeded -- it used to silently DECRYPT the file"
+else
+  pass "protect(permissions) with no password is refused, not answered by removing the lock"
+fi
+docker exec "$CONTAINER" test -e "$D/unlocked.pdf" &&
+  fail "the refusal still wrote a file" ||
+  pass "the refusal wrote nothing"
 
 run edit redact "{\"source\":\"$PDF\",\"pattern\":\"1450.50\",\"out\":\"$D/redacted.pdf\"}" \
   "permanently remove the APAC revenue figure"
