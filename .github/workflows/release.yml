@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  ci:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+
+    env:
+      MCP_CONSTRAINED_MODE: "1"
+      PYTHONPATH: "."
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.14"
+
+      - run: uv sync --frozen
+
+      - run: uv run ruff check .
+
+      - run: uv run ruff format --check .
+
+      - run: uv run pyright core/ servers/ shared/ unified_server.py
+
+      - run: uv run python tests/verify_tool_docstrings.py
+
+      - run: uv run python -m pytest tests/ -q --tb=short
+
+  # Publishes ghcr.io/<owner>/documents-mcp-server:<version> + :latest through
+  # the shared composite action hosted in MCP_Math, so the build/push mechanics
+  # stay in one place across all azzindani MCP_* repos.
+  docker:
+    name: Publish Docker image (GHCR)
+    needs: ci
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and push
+        uses: azzindani/MCP_Math/.github/actions/docker-ghcr-publish@main
+        with:
+          image-name: documents-mcp-server
+          push: "true"
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  release:
+    name: Create Release
+    needs: ci
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract tag
+        id: tag
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.version }}
+          name: ${{ steps.tag.outputs.version }}
+          draft: false
+          prerelease: ${{ contains(steps.tag.outputs.version, '-rc') || contains(steps.tag.outputs.version, '-beta') || contains(steps.tag.outputs.version, '-alpha') }}
+          generate_release_notes: true

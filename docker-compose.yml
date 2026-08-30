@@ -1,0 +1,122 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# documents-mcp-server — local & VPS-friendly compose stack.
+#
+# One image, ONE container: unified_server.py mounts both sub-servers on one
+# port, so the PDF stack loads once instead of twice. Both share one bearer
+# token set (DOCS_TOKENS_FILE / DOCS_TOKENS / DOCS_API_KEY) because they are
+# one deployment unit.
+#
+# Quick start (open mode, no auth — localhost/private network only):
+#   docker compose up -d --build
+#   curl http://localhost:8850/health          # aggregate
+#   curl http://localhost:8850/read/health     # per sub-server
+#
+# With auth: cp tokens.example.json tokens.json && docker compose up -d --build
+#
+# TLS and the public hostname are out of scope here — front this and its six
+# sibling MCP_* services with your own Caddy/nginx.
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  documents:
+    build:
+      context: .
+    image: ${DOCS_IMAGE:-documents-mcp-server:latest}
+    container_name: mcp-documents
+    restart: unless-stopped
+    # convert(to='pdf') shells out to LibreOffice, which spawns gpg/gpgconf and
+    # oosplash helpers of its own. subprocess.run reaps soffice, but those
+    # grandchildren are orphaned onto PID 1 -- and PID 1 here is
+    # unified_server.py, which does not reap adopted children. They accumulate
+    # as zombies for the life of the container, one small batch per conversion.
+    # tini as PID 1 reaps them. Same fix as MCP_Microsoft_Office, which hit it
+    # first with the same LibreOffice call.
+    init: true
+    ports:
+      - "${DOCS_HOST_PORT:-8850}:8850"
+    environment:
+      DOCS_HOST: 0.0.0.0
+      DOCS_PORT: 8850
+      DOCS_TOKENS_FILE: ${DOCS_TOKENS_FILE:-}
+      DOCS_TOKENS: ${DOCS_TOKENS:-}
+      DOCS_API_KEY: ${DOCS_API_KEY:-}
+      # The public HTTPS origin (no trailing slash, no tier suffix) this
+      # service is reachable at through the reverse proxy — each server.py
+      # appends its own /read or /edit. REQUIRED for OAuth discovery once
+      # mounted behind a path prefix: without it both the 401's
+      # WWW-Authenticate hint and the SDK's own
+      # /.well-known/oauth-protected-resource route fall back to the internal
+      # bind address, which no remote client can reach.
+      DOCS_PUBLIC_URL: ${DOCS_PUBLIC_URL:-}
+      # One state dir per sub-server even though this is one process: each is
+      # its own claude.ai connector at its own path, and two OAuthBridges
+      # sharing a state file corrupt each other's tokens with uncoordinated
+      # concurrent writes.
+      DOCS_READ_OAUTH_STATE_DIR: /home/app/.oauth-state/read
+      DOCS_EDIT_OAUTH_STATE_DIR: /home/app/.oauth-state/edit
+      DOCS_OAUTH_CLIENT_ID: ${DOCS_OAUTH_CLIENT_ID:-}
+      DOCS_OAUTH_CLIENT_SECRET: ${DOCS_OAUTH_CLIENT_SECRET:-}
+      # Hybrid file exchange. MCP_OUTPUT_DIR doubles as the in-container mount
+      # point below so the two cannot drift: point MCP_SHARED_DIR at a host
+      # directory your file server also serves, set MCP_PUBLIC_BASE_URL to that
+      # directory's public URL, and every produced PDF/txt/md/png comes back
+      # with a public_url the caller can open. Without it, assemble() and
+      # convert() write into ~/Downloads *inside the container* — a black hole
+      # for any remote caller.
+      MCP_OUTPUT_DIR: ${MCP_OUTPUT_DIR:-/files}
+      MCP_PUBLIC_BASE_URL: ${MCP_PUBLIC_BASE_URL:-}
+      # Off by default. With it on, every `source` argument in this server may
+      # be an http(s) URL — this is what makes "everything is fetchable" true
+      # with no per-tool code. Hosts resolving to loopback/link-local/private
+      # addresses are refused unless MCP_FETCH_ALLOW_PRIVATE=1; don't relax
+      # that on a publicly reachable deployment.
+      MCP_FETCH_URLS: ${MCP_FETCH_URLS:-0}
+      MCP_FETCH_ALLOW_PRIVATE: ${MCP_FETCH_ALLOW_PRIVATE:-0}
+      MCP_MAX_FETCH_MB: ${MCP_MAX_FETCH_MB:-100}
+      # Tightens every budget in core/budget.py for an 8 GB / 9B target.
+      MCP_CONSTRAINED_MODE: ${MCP_CONSTRAINED_MODE:-0}
+      # Must exceed the reverse proxy's idle-connection pool (Caddy: 2 min) or
+      # the proxy reuses a socket this server has already closed and turns it
+      # into a 200 with zero bytes AFTER the tool has run. See unified_server.py.
+      MCP_KEEPALIVE_SECONDS: ${MCP_KEEPALIVE_SECONDS:-300}
+    # 2 GiB, measured rather than reasoned about — see docs/DECISIONS.md.
+    # Read from this container's own cgroup (memory.peak), not estimated:
+    #
+    #     at rest, both sub-servers loaded                    75 MiB
+    #     the whole smoke test, all 13 tools                 291 MiB
+    #     render + OCR + LibreOffice + probe, concurrent     574 MiB
+    #     three concurrent convert(to='images')              649 MiB
+    #
+    # Rendering dominates, and it is the one allocation bounded by a budget
+    # rather than by the document: PDFium hands back an RGBA buffer capped at
+    # DOCS_MAX_RENDER_BYTES (256 MiB unconstrained) and PIL then holds its own
+    # copy plus the PNG encoder's. The subprocesses share this cgroup too —
+    # soffice for the life of a conversion, tesseract per page — which is why
+    # the mixed case is nearly as expensive as three renders.
+    #
+    # 2 GiB is roughly 3x the worst measured case. 1 GiB would leave ~375 MiB
+    # over it, which is one larger document away from an OOM, and the failure
+    # mode is not a refusal: the killer takes the process, both sub-servers go
+    # down together, and the caller sees a closed socket that is
+    # indistinguishable from a network fault. A sibling repo lost twelve tools
+    # at once exactly that way.
+    mem_limit: ${DOCS_MEM_LIMIT:-2g}
+    volumes:
+      # Optional — only read when DOCS_TOKENS_FILE points at it. Run
+      # `cp tokens.example.json tokens.json` before first up, or Docker
+      # creates an empty DIRECTORY in its place and the server starts, answers
+      # /health, and rejects every token.
+      - ./tokens.json:/home/app/tokens.json:ro
+      # Shared output directory (see MCP_OUTPUT_DIR). The container writes as
+      # uid/gid 999 (`app`), so `chown 999:999` the host directory before first
+      # run — left root-owned, every generated document fails EACCES.
+      - ${MCP_SHARED_DIR:-./shared-files}:${MCP_OUTPUT_DIR:-/files}
+      # Persists OAuth-issued access/refresh tokens (one subdir per
+      # sub-server) so a restart doesn't force claude.ai to reauthorize.
+      # `mkdir -p oauth-state && chown 999:999 oauth-state` before first run.
+      - ./oauth-state:/home/app/.oauth-state
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8850/health', timeout=10)"]
+      interval: 30s
+      timeout: 12s
+      start_period: 15s
+      retries: 4

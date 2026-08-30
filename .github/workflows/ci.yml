@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+
+    # No MCP_CONSTRAINED_MODE here: this is the normal-limits run, and every
+    # budget in core/budget.py has two branches. The constrained job below
+    # covers the other one -- a sibling repo set the flag on its only matrix
+    # and so never once tested the unconstrained half.
+    env:
+      PYTHONPATH: "."
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Format check
+        run: uv run ruff format --check .
+
+      - name: Type check
+        run: uv run pyright core/ servers/ shared/ unified_server.py
+
+      - name: Verify tool docstrings
+        run: uv run python tests/verify_tool_docstrings.py
+
+      # No fixture-generation step, unlike the sibling repos: the corpus is
+      # built by session-scoped pytest fixtures calling tests/fixtures/build.py
+      # and build_formats.py, so it cannot go stale relative to the tests that
+      # use it. LibreOffice and Tesseract are absent on these runners, and the
+      # three tests that need them skip on binaries.available() -- which is
+      # also the assertion that the missing-binary refusal path works.
+      - name: Run tests
+        run: uv run python -m pytest tests/ -q --tb=short
+
+  constrained:
+    name: Constrained mode (ubuntu)
+    runs-on: ubuntu-22.04
+
+    env:
+      MCP_CONSTRAINED_MODE: "1"
+      PYTHONPATH: "."
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run tests in constrained mode
+        run: uv run python -m pytest tests/ -q --tb=short
+
+  docker-build:
+    name: Docker image builds
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image (no push)
+        uses: azzindani/MCP_Math/.github/actions/docker-ghcr-publish@main
+        with:
+          image-name: documents-mcp-server
+          push: "false"
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+
+  # pytest never starts a server (STANDARDS.md keeps the suite offline) and the
+  # docker job never runs the image it builds, so nothing above proves that
+  # what we ship answers a request. Shared action, because this is identical in
+  # all seven repos and drift between copies is the bug that keeps costing
+  # rounds.
+  #
+  # It is also the only place LibreOffice and Tesseract are exercised at all:
+  # the matrix runners have neither, so convert(to='pdf') and ocr() are tested
+  # here or nowhere.
+  e2e:
+    name: End-to-end (container)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Smoke test every tool over HTTP
+        uses: azzindani/MCP_Math/.github/actions/e2e-smoke@main
+        with:
+          port: "8850"
+          key-env: DOCS_API_KEY
+          # Deliberately not the deployed hostname. Rebinding protection is
+          # off, so any Host must be accepted; an arbitrary one proves exactly
+          # that and keeps the real domain out of one more file.
+          public-host: documents.example.com
+          mcp-path: /read/mcp
+          # The image installs LibreOffice, so `up -d --build` is minutes
+          # before /health can answer at all.
+          health-timeout: "300"
+          create-dirs: "oauth-state"
+          shared-dir: shared-files

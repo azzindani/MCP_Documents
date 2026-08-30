@@ -42,7 +42,7 @@ _oauth_bridge = build_oauth_bridge(
 _public_origin = os.environ.get("DOCS_PUBLIC_URL", "").rstrip("/")
 _base_url = f"{_public_origin}/read" if _public_origin else None
 _HOST = os.environ.get("DOCS_READ_HOST", "127.0.0.1")
-_PORT = int(os.environ.get("DOCS_READ_PORT", "8816"))
+_PORT = int(os.environ.get("DOCS_READ_PORT", "8851"))  # 8850 block; see unified_server.py
 _token_verifier, _auth_settings = build_auth("DOCS", _base_url, _oauth_bridge)
 
 mcp = FastMCP(

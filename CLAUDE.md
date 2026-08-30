@@ -545,7 +545,7 @@ of the server modules' AST and fails if one never appears in the smoke script.
 - [x] `shared/` copied from siblings (see §13 rule 13 for which are common)
 - [x] `uv sync` clean on 3.14 — every pin has a cp314 or pure-Python wheel
 - [x] `unified_server.py` mounting both tiers, `/health` answering
-- [ ] Dockerfile, docker-compose, CI (`ci.yml`, `release.yml`), e2e job
+- [x] Dockerfile, docker-compose, CI (`ci.yml`, `release.yml`), e2e job
 
 ### Phase 2 — The IR and readers  ✅
 - [x] `core/ir.py`, `core/cache.py`, `core/paths.py`, `core/binaries.py`
@@ -570,11 +570,35 @@ of the server modules' AST and fails if one never appears in the smoke script.
 - [x] `assemble` — the grammar, with the parse echoed back
 - [x] `convert` · `optimize` · `ocr` · `protect`
 - [x] `redact` **last**, with its verification step
-- [ ] `convert(to='pdf')` is written but untested here — needs LibreOffice
-- [ ] `optimize` image downsampling — needs a Ghostscript decision (AGPL)
+- [x] `convert(to='pdf')` exercised against real LibreOffice in the container
+- [x] `optimize` image downsampling — decided against; Ghostscript is AGPL and
+      this is a network service (DECISIONS §11). The absence is reported, not
+      hidden, and `--build-arg INSTALL_GHOSTSCRIPT=1` is there for an operator
+      who accepts the licence.
 
 ### Phase 5 — Deployment
-- [ ] Dockerfile carrying LibreOffice + Tesseract, and a memory limit decision
-- [ ] Bearer auth and OAuth bridge wired end to end (code is in place)
-- [ ] `remote_smoke_test.sh` + the coverage guard
+- [x] Dockerfile carrying LibreOffice + Tesseract, and a memory limit measured
+      from the container's own cgroup rather than estimated (DECISIONS §12)
+- [x] Bearer auth and OAuth bridge wired end to end — 401 without a token,
+      sessions on both mounts, verified over HTTP
+- [x] `remote_smoke_test.sh`, all 13 tools, plus the coverage guard and a test
+      that its envelope patterns are escaped-JSON aware
+- [x] Port block moved to 8850-8859; 8816 was already `DATA_WORKSPACE_PORT`
+      (DECISIONS §13)
 - [ ] Live deployment behind the reverse proxy
+
+**Six defects were found by writing the smoke test, and none by the 145 tests
+that already passed.** Each has a regression test named after the wrong answer:
+
+| what it did | where |
+|---|---|
+| `redact` could not touch a subset font, or kerned text | `_edit_secure.py` |
+| `to_markdown` collapsed every page-less format onto one line | `core/order.py` |
+| `extract_tables` returned `1450.` for a cell reading `1450.50` | `core/tables.py` |
+| a URL source worked in docs-edit and not in docs-read | `core/readers` |
+| no produced file ever carried a `public_url` | `core/formatter.py` |
+| a blocked URL raised `ValueError` through the tool layer | `core/paths.py` |
+
+The shape they share: every one returned `success: true` (or a refusal blaming
+the document) while being wrong, and every one needed a REAL document — one
+LibreOffice made, one Tesseract read — to show up at all.

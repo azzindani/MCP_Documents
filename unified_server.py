@@ -140,7 +140,14 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="MCP_Documents unified server")
     parser.add_argument("--host", default=os.environ.get("DOCS_HOST", "0.0.0.0"))
-    parser.add_argument("--port", type=int, default=int(os.environ.get("DOCS_PORT", "8816")))
+    # 8850, and 8850-8859 is this repo's block. The fleet's ports are allocated
+    # by hand and 8816 -- the original default here -- was already
+    # DATA_WORKSPACE_PORT, so running MCP_Documents and MCP_Data_Analyst as
+    # standalone HTTP servers on one box raced for the same socket. Whichever
+    # bound second died with EADDRINUSE, which is loud; the worse case is a
+    # client configured for 8816 that reaches the other server's tool list.
+    # Taken: 8765 math, 8801 fs, 8810-8816 data, 8820-8822 ml, 8830-8840 office.
+    parser.add_argument("--port", type=int, default=int(os.environ.get("DOCS_PORT", "8850")))
     args = parser.parse_args()
     # timeout_keep_alive must exceed the reverse proxy's idle-connection pool,
     # or the proxy reuses a connection this server has already closed. uvicorn's
