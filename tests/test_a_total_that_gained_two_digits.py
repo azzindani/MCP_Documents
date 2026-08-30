@@ -94,11 +94,7 @@ class TestTheFigureIsTheOneTheIssuerFiled:
     @pytest.mark.parametrize("page,figure", sorted(GLUED_PAGES.items()))
     def test_figures_are_not_glued_to_the_next_label(self, filing, page, figure):
         """The recoverable cases, which share one cause with the dangerous one."""
-        words = [
-            span.text
-            for block in load_page_words(open_source(filing), page).blocks
-            for span in block.spans
-        ]
+        words = [span.text for block in load_page_words(open_source(filing), page).blocks for span in block.spans]
         assert figure in words
         assert not [w for w in words if w.startswith(figure) and w != figure]
 
@@ -113,9 +109,7 @@ class TestNothingElseWasSplit:
         filings, so this is the case a tolerance-based fix breaks.
         """
         words = [
-            span.text
-            for block in load_page_words(open_source(filing), EQUITY_PAGE).blocks
-            for span in block.spans
+            span.text for block in load_page_words(open_source(filing), EQUITY_PAGE).blocks for span in block.spans
         ]
         bracketed = [w for w in words if w.startswith("(") and w.endswith(")")]
         assert bracketed, "the page has negative figures; none survived as a unit"
