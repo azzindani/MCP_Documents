@@ -549,8 +549,16 @@ def test_convert_to_text_works_for_every_readable_format(formats, tmp_path, name
     payload = edit.convert(str(formats[name]), to="md", out=str(out))
     _contract(payload, "convert")
     assert payload["success"], payload.get("error")
-    assert out.exists() and out.read_text().strip()
-    assert payload["result"]["characters"] == len(out.read_text())
+    # encoding="utf-8" explicitly, because convert() writes UTF-8 and
+    # Path.read_text() with no encoding uses the LOCALE's -- cp1252 on the
+    # Windows runner. The article fixture contains one "›" (U+203A), three
+    # bytes in UTF-8 and therefore three characters read as cp1252, so
+    # `characters` was compared against a length two higher than the file's:
+    # 495 against 497, on Windows only. The tool was right; the test was
+    # reading the file in a different encoding from the one it was written in.
+    written = out.read_text(encoding="utf-8")
+    assert out.exists() and written.strip()
+    assert payload["result"]["characters"] == len(written)
 
 
 def test_convert_to_images_still_requires_a_pdf(formats, tmp_path):
