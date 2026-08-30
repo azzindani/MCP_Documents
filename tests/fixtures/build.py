@@ -327,6 +327,81 @@ def damaged(name: str = "damaged.pdf") -> Path:
     return path
 
 
+def overflowing(name: str = "overflowing.pdf") -> Path:
+    """Text drawn OUTSIDE the page's own MediaBox.
+
+    Nothing guarantees a word sits inside the box its page declares, and this
+    is not exotic: every one of the twelve Indonesian supreme-court judgments
+    in the real corpus is 595.3pt wide and carries a rotated margin watermark
+    running out to 645.8. `core.order.gutter_positions` sized its crossings
+    array to the page width and then scanned from the leftmost to the rightmost
+    BLOCK, so it indexed past the end and raised IndexError -- out of
+    read_page, outline, extract, to_markdown and convert, as an unhandled
+    exception rather than a response with an error and a hint.
+
+    The overflow here is 50pt past the right edge, the same order as the real
+    documents'. Enough text is drawn inside the box to clear
+    MIN_WORDS_FOR_COLUMNS, or column detection returns early and never reaches
+    the scan that crashes.
+    """
+    pdf = pikepdf.Pdf.new()
+    items = [(72.0, 100.0 + i * 16, f"Body line {i + 1} of ordinary width on this page.", 11.0) for i in range(24)]
+    # Past the right edge. W is 612, so this ends around 660.
+    items += [(W - 20.0, 120.0 + i * 40, "MARGIN WATERMARK TEXT", 9.0) for i in range(6)]
+    pdf.pages.append(_page(pdf, _text_ops(items)))
+    return _save(pdf, name)
+
+
+def blank_and_scanned(name: str = "blank_and_scanned.pdf") -> Path:
+    """Three pages: born-digital, a drawn page with no text, and a true blank.
+
+    `probe` reported the last two identically. A page with zero extractable
+    characters went into the `empty` AND `scanned` buckets and the count then
+    subtracted one from the other, so `page_kinds.scanned` was zero for every
+    ordinary scan -- and a real scan extracts exactly zero characters, so only
+    a page in the 1..31 band could ever survive. The `hybrid` fixture happens
+    to have a page with ONE character, which is why the suite never saw it.
+
+    The distinction is ink, not characters: page 2 has something OCR could
+    read, page 3 has nothing at all.
+    """
+    pdf = pikepdf.Pdf.new()
+    readable = [(72.0, 100.0 + i * 16, f"Readable line {i + 1}.", 11.0) for i in range(20)]
+    pdf.pages.append(_page(pdf, _text_ops(readable)))
+    # Filled rectangles: drawable content, no text layer. A scan, in the only
+    # sense that matters here.
+    pdf.pages.append(_page(pdf, b"0.5 g\n72 200 400 300 re f\n72 550 400 100 re f"))
+    # Nothing at all.
+    pdf.pages.append(_page(pdf, b""))
+    return _save(pdf, name)
+
+
+def front_heavy(name: str = "front_heavy.pdf") -> Path:
+    """A document whose FIRST pages are much denser than its mean.
+
+    Which is every real document: front matter, a contents page, a dense legal
+    preamble. A budget refusal computed the range it suggests by spreading the
+    whole document's cost evenly and taking the front of it, so the suggestion
+    was always too big and following the hint verbatim got refused again. On a
+    238-page regulation the chain was 1-23 (refused) then 1-20 (accepted).
+
+    A uniform fixture cannot show this: the mean and the front are the same
+    number. Here the first 10 pages carry roughly four times the text of the
+    last 30.
+    """
+    pdf = pikepdf.Pdf.new()
+    for _ in range(10):
+        dense = [
+            (60.0, 60.0 + i * 11, f"Dense front matter line {i + 1}: " + "lorem ipsum dolor sit amet " * 2, 8.0)
+            for i in range(60)
+        ]
+        pdf.pages.append(_page(pdf, _text_ops(dense)))
+    for n in range(30):
+        sparse = [(72.0, 100.0 + i * 20, f"Sparse body page {n + 1} line {i + 1}.", 11.0) for i in range(15)]
+        pdf.pages.append(_page(pdf, _text_ops(sparse)))
+    return _save(pdf, name)
+
+
 def clipped_table(name: str = "clipped_table.pdf") -> Path:
     """An unruled table whose content runs past the grid pdfplumber infers.
 
@@ -532,6 +607,9 @@ BUILDERS = {
     "encrypted": encrypted,
     "damaged": damaged,
     "clipped_table": clipped_table,
+    "overflowing": overflowing,
+    "blank_and_scanned": blank_and_scanned,
+    "front_heavy": front_heavy,
     "kerned": kerned,
     "subset_font": subset_font,
     "large": large,

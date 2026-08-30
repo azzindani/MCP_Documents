@@ -83,17 +83,18 @@ def to_markdown(source: str, pages: str = "", password: str = "") -> dict:
     except SelectionError as exc:
         return fail(op, str(exc), exc.hint, progress)
 
-    from servers.docs_read._read_extract import _estimate_tokens
+    from servers.docs_read._read_extract import _estimate_tokens, suggest_range
 
     estimated = _estimate_tokens(doc, wanted)
     ceiling = budget.max_response_tokens()
     if estimated > ceiling:
-        fits = max(1, int(len(wanted) * ceiling / estimated))
+        # Measured, not scaled -- see suggest_range. The scaled version named a
+        # range that its own estimator then refused.
+        suggestion = format_pages(suggest_range(doc, wanted, ceiling, estimated))
         return refuse(
             op,
             f"{len(wanted)} page(s) is about {estimated:,} tokens, over the {ceiling:,} limit.",
-            f"Use to_markdown(pages='{format_pages(wanted[:fits])}'), "
-            "or find() to locate what you need and extract() to read it.",
+            f"Use to_markdown(pages='{suggestion}'), or find() to locate what you need and extract() to read it.",
             limit=f"{ceiling} tokens",
             seen=f"~{estimated} tokens",
             progress=progress,

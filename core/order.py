@@ -142,14 +142,27 @@ def gutter_positions(page: Page) -> list[tuple[int, int]]:
         return []
     segments = [seg for row in rows for seg in _segments(row, min_gutter)]
 
-    width = int(page.width) + 1
+    left = min(int(b[0]) for b in boxes)
+    right = max(int(b[2]) for b in boxes)
+
+    # Sized to whatever the TEXT occupies, not to the declared page width.
+    # Nothing guarantees a word sits inside its own MediaBox: every Indonesian
+    # supreme-court judgment in the corpus is 595.3pt wide and carries a
+    # rotated margin watermark out to 645.8, and the scan below indexed
+    # crossings[645] on an array of 596. That is 12 of 170 real documents, and
+    # it took out five of the thirteen tools -- outline, extract, read_page,
+    # to_markdown and convert all call detect_columns -- as an IndexError
+    # escaping the tool layer, so the caller got a raw Python string instead of
+    # a response with an error and a hint.
+    #
+    # `probe` and `find` do not use this, so a caller following the documented
+    # probe -> find -> extract path was told the document was fine twice and
+    # then hit an exception on the third call.
+    width = max(int(page.width), right) + 1
     crossings = [0] * width
     for x0, x1 in segments:
         for x in range(max(0, int(x0)), min(width, int(x1) + 1)):
             crossings[x] += 1
-
-    left = min(int(b[0]) for b in boxes)
-    right = max(int(b[2]) for b in boxes)
     max_crossings = len(rows) * MAX_GUTTER_CROSSING_FRACTION
 
     row_segments = [_segments(row, min_gutter) for row in rows]

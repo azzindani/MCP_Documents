@@ -66,13 +66,20 @@ def _run(plumbed_page, settings: dict, basis: Basis) -> list[dict]:
     # table on it made the suite six times slower.
     if not tables:
         return out
-    words = plumbed_page.extract_words() if basis == "whitespace" else []
+
+    # BOTH strategies fill cells from whole words. This was applied to the
+    # whitespace path only, on the reasoning that a ruled table's rules sit
+    # between cells so no word can straddle one. Real documents disagree: on a
+    # supreme-court judgment the ruled header cell came back as
+    # `Ditambah/(Dikurangi)Keberata` while the row band plainly contains
+    # `Keberatan` — pdfplumber assigns characters by position and clips at the
+    # cell edge whichever strategy found the cell, so a value that overhangs
+    # its own rule is cut. High confidence made it worse, not better: 0.95 on a
+    # word missing its last letter.
+    words = plumbed_page.extract_words()
 
     for table in tables:
-        if basis == "whitespace":
-            rows = _rows_from_words(table, words)
-        else:
-            rows = [[(cell or "").strip() for cell in row] for row in table.extract()]
+        rows = _rows_from_words(table, words)
         rows = [row for row in rows if any(cell for cell in row)]
         if not rows:
             continue

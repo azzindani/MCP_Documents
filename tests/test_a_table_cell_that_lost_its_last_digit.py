@@ -113,11 +113,66 @@ class TestTheHonestPartsAreUnchanged:
         assert "not included" in table["note"]
 
     def test_a_ruled_table_is_still_exact(self, corpus):
-        """The high-confidence path is untouched: its grid is real."""
+        """The high-confidence path still reports itself as high-confidence."""
         payload = read.extract_tables(str(corpus["ruled_table"]))
         table = payload["result"]["tables"][0]
         assert table["basis"] == "ruled"
         assert table["confidence"] == 0.95
+
+    def test_the_ruled_values_are_exact(self, corpus):
+        """And its values are still the fixture's, cell for cell."""
+        rows = read.extract_tables(str(corpus["ruled_table"]))["result"]["tables"][0]["rows"]
+        joined = " ".join(cell for row in rows for cell in row)
+        for value in ("Widget", "Gadget"):
+            assert value in joined
+
+
+class TestTheRuledPathIsAlsoWholeWords:
+    """Round 1's sweep found the same clipping on the RULED path.
+
+    The first fix applied the whole-word rebuild to the whitespace strategy
+    only, reasoning that a ruled table's rules sit between cells so no word can
+    straddle one. A supreme-court judgment disagreed: the ruled header cell came
+    back as `Ditambah/(Dikurangi)Keberata` while the row band plainly contains
+    `Keberatan`. pdfplumber assigns characters by position and clips at the cell
+    edge whichever strategy found the cell.
+
+    High confidence made it worse rather than better — 0.95 on a word missing
+    its last letter, with a note that only warns about the shape.
+    """
+
+    def test_a_value_overhanging_its_own_rule_survives(self, corpus, tmp_path):
+        """Built here rather than taken from the corpus: the corpus is not this
+        repo's to publish, and the property is reproducible in fourteen lines.
+
+        The rule is drawn so it cuts through the middle of the last word, which
+        is exactly what a tight table column does to a long heading.
+        """
+        import pikepdf
+
+        from tests.fixtures.build import _page, _rect_ops, _text_ops
+
+        pdf = pikepdf.Pdf.new()
+        cells = _text_ops(
+            [
+                (80.0, 110.0, "Uraian", 9.0),
+                (200.0, 110.0, "Keberatan", 9.0),
+                (80.0, 140.0, "Total", 9.0),
+                (200.0, 140.0, "1450.50", 9.0),
+            ]
+        )
+        # Column rule at x=250, mid-way through "Keberatan" and "1450.50".
+        rules = _rect_ops([(70.0, 95.0, 180.0, 60.0), (250.0, 95.0, 120.0, 60.0)])
+        pdf.pages.append(_page(pdf, rules, cells))
+        source = tmp_path / "tight_rules.pdf"
+        pdf.save(source)
+
+        payload = read.extract_tables(str(source))
+        assert payload["success"], payload
+        joined = " ".join(c for t in payload["result"]["tables"] for row in t["rows"] for c in row)
+        assert "Keberatan" in joined, f"clipped: {joined!r}"
+        assert "1450.50" in joined, f"clipped: {joined!r}"
+        assert "Keberata " not in joined and joined.count("1450.5 ") == 0
 
     def test_the_unruled_fixture_still_finds_its_values(self, corpus):
         payload = read.extract_tables(str(corpus["unruled_table"]))
