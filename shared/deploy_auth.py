@@ -77,7 +77,7 @@ def build_token_verifier(
     as a fallback whenever a presented token doesn't match a static one.
 
     base_url must be the PUBLIC HTTPS URL this server is reachable at,
-    including any reverse-proxy mount prefix (e.g. "https://data.casava.space/basic")
+    including any reverse-proxy mount prefix (e.g. "https://<your-host>/read")
     — fastmcp bakes it into the WWW-Authenticate `resource_metadata` hint on 401
     responses at app-build time (it can't be derived per-request the way
     oauth_bridge.py's own routes can via root_path). Without it, the 401 omits
