@@ -83,11 +83,7 @@ class TestTheAnswerDoesNotDependOnWhatRanBefore:
         import pypdfium2 as pdfium
 
         pdf = pdfium.PdfDocument(filing)
-        pages = [
-            n
-            for n in range(1, len(pdf) + 1)
-            if PHRASE in pdf[n - 1].get_textpage().get_text_bounded()
-        ]
+        pages = [n for n in range(1, len(pdf) + 1) if PHRASE in pdf[n - 1].get_textpage().get_text_bounded()]
         assert pages == [7, 178]
 
 
