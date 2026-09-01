@@ -76,25 +76,17 @@ jobs:
       - name: Run tests in constrained mode
         run: uv run python -m pytest tests/ -q --tb=short
 
-  docker-build:
-    name: Docker image builds
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build image (no push)
-        uses: azzindani/MCP_Math/.github/actions/docker-ghcr-publish@main
-        with:
-          image-name: documents-mcp-server
-          push: "false"
-          registry-username: ${{ github.actor }}
-          registry-password: ${{ secrets.GITHUB_TOKEN }}
-
-  # pytest never starts a server (STANDARDS.md keeps the suite offline) and the
-  # docker job never runs the image it builds, so nothing above proves that
-  # what we ship answers a request. Shared action, because this is identical in
-  # all seven repos and drift between copies is the bug that keeps costing
-  # rounds.
+  # pytest never starts a server (STANDARDS.md keeps the suite offline), so
+  # nothing above proves that what we ship answers a request. This job also
+  # builds that thing on the way in -- `docker compose up --build` from the
+  # same context and Dockerfile a release would use. Shared action, because
+  # this is identical in all seven repos and drift between copies is the bug
+  # that keeps costing rounds.
+  #
+  # That is why there is no separate build-only job any more. One existed, and
+  # it could not fail in any case where this job does not fail first; all it
+  # added was a second full image build on every push -- and this repo's image
+  # carries LibreOffice and Tesseract, so it is one of the expensive ones.
   #
   # It is also the only place LibreOffice and Tesseract are exercised at all:
   # the matrix runners have neither, so convert(to='pdf') and ocr() are tested
