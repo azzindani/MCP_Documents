@@ -6,9 +6,12 @@ documents — PDF first, but not PDF only.**
 The seventh repo in the `MCP_*` fleet, and the one that closes the *research*
 leg of the research → analytics → reporting path the fleet exists to serve.
 
-> **Status: design complete, not yet implemented.** See `CLAUDE.md` §14 for the
-> build order. The documents in `docs/` are the contract the implementation must
-> satisfy.
+> **Release [`v0.1.0`](https://github.com/azzindani/MCP_Documents/releases/tag/v0.1.0)
+> — the first tagged release.** All 13 tools are implemented and deployed; CI is
+> green on Ubuntu, macOS and Windows. Source only: no wheel and no container
+> image are published, so build the image yourself from the `Dockerfile` here.
+> The documents in `docs/` remain the contract the implementation satisfies, and
+> `CLAUDE.md` is the rulebook for anyone changing it.
 
 ---
 
@@ -151,12 +154,12 @@ addresses are refused even when it is on.
 ### Checking a deployment
 
 ```bash
-uv run python -m pytest tests/ -q                     # 205 offline tests
+uv run python -m pytest tests/ -q                     # 408 offline tests
 DOMAIN=http://localhost:8850 ./remote_smoke_test.sh   # all 13 tools over HTTP
 ```
 
 The smoke test is the only thing that exercises LibreOffice and Tesseract, and
-it is worth more than its size suggests: it found six defects that 145 passing
-tests did not, because it is the only check that hands these tools a document
+it is worth more than its size suggests: it found six defects the whole offline
+suite did not, because it is the only check that hands these tools a document
 real software produced. `DOMAIN` has no default on purpose — no hostname
 appears anywhere in this repo.
