@@ -36,7 +36,7 @@ from starlette.routing import Mount, Route
 from servers.docs_edit.server import mcp as edit_mcp
 from servers.docs_read.server import mcp as read_mcp
 
-_VERSION = "0.0.1"
+_VERSION = "0.1.0"
 
 _SUB_SERVERS = {
     "read": read_mcp,
