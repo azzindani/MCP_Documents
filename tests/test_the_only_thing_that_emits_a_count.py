@@ -44,7 +44,7 @@ def _py_files() -> list[Path]:
 def test_no_module_writes_the_truncated_key_by_hand():
     offenders: list[str] = []
     for path in _py_files():
-        lines = path.read_text().splitlines()
+        lines = path.read_text(encoding="utf-8").splitlines()
         for i, line in enumerate(lines):
             if line.strip().startswith("#"):
                 continue  # modules quote the banned string while explaining it
@@ -66,7 +66,7 @@ def test_no_module_sets_truncated_only_when_it_is_true():
     pattern = re.compile(r'\[\s*"truncated"\s*\]\s*=')
     offenders: list[str] = []
     for path in _py_files():
-        for i, line in enumerate(path.read_text().splitlines(), 1):
+        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if line.strip().startswith("#"):
                 continue
             if pattern.search(line):
