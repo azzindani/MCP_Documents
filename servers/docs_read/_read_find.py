@@ -20,6 +20,7 @@ from core.formatter import fail, ok, refuse
 from core.ir import weakest_basis
 from core.readers import ReaderError, load_page, open_source
 from core.selection import SelectionError, format_pages, parse_pages
+from shared.counts import counted
 from shared.progress import info, warn
 
 OP = "find"
@@ -106,17 +107,19 @@ def find(
 
     result = {
         "hits": hits,
-        "returned": len(matches),
         "pages": format_pages(hit_pages),
         "pages_searched": len(wanted),
         "pages_skipped_no_text": scanned_without_text,
         "matches": matches,
+        # A truncated answer that does not say so is the worst kind. The count
+        # is exact even when the list is not, so the caller can tell "47 hits,
+        # here are 47" from "4,000 hits, narrow it down". Emitted on every
+        # response rather than only the cut ones -- the flag used to be set
+        # inside the branch below, so a complete answer carried none at all,
+        # and an absent flag is not the same as a False one.
+        **counted(len(matches), hits),
     }
-    # A truncated answer that does not say so is the worst kind. The count is
-    # exact even when the list is not, so the caller can tell the difference
-    # between "47 hits, here are 47" and "4,000 hits, narrow it down".
     if hits > len(matches):
-        result["truncated"] = True
         result["returned_limit"] = ceiling
         # Which of the two limits actually bit. `ceiling` is min(max_hits, what
         # the response budget affords), so past that point raising max_hits

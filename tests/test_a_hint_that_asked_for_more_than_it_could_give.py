@@ -81,5 +81,12 @@ class TestTheCountAndThePagesAreNeverTruncated:
     def test_an_untruncated_answer_carries_no_ceiling_field(self, filing):
         payload = read.find(filing, "JUMLAH EKUITAS")["result"]
         assert payload["hits"] == payload["returned"]
-        assert "truncated" not in payload
+        # `truncated` is now present and False rather than absent. This line
+        # used to assert absence, which is the convention the fleet-wide counts
+        # contract exists to end: a caller cannot tell "nothing was cut" from
+        # "this tool does not report cutting", and only one of those two means
+        # the answer is complete. The field this test is named for --
+        # `returned_limit`, the ceiling -- still appears only when a cap bit,
+        # which is the behaviour it was written to pin.
+        assert payload["truncated"] is False
         assert "returned_limit" not in payload
