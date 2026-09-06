@@ -31,6 +31,7 @@ from starlette.responses import JSONResponse  # noqa: E402
 from servers.docs_edit import engine  # noqa: E402
 from shared.deploy_auth import build_auth, build_oauth_bridge  # noqa: E402
 from shared.json_safe import sanitize_responses  # noqa: E402
+from shared.strict_args import enforce_known_arguments
 from shared.token_estimate import measure_responses  # noqa: E402
 from shared.tool_annotations import CREATES, EDITS  # noqa: E402
 
@@ -111,6 +112,11 @@ def redact(source: str, pattern: str, pages: str = "", regex: bool = False, out:
 # Python client. A choke point cannot be forgotten by the next tool added.
 sanitize_responses(mcp)
 measure_responses(mcp)
+
+# An argument name no tool declares is dropped by the bundled FastMCP's
+# pydantic model (extra="ignore") and the call succeeds anyway. Installed
+# last so it wraps the guards above and answers first.
+enforce_known_arguments(mcp)
 
 
 def main() -> None:
