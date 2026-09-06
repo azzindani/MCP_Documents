@@ -29,6 +29,7 @@ from starlette.requests import Request  # noqa: E402
 from starlette.responses import JSONResponse  # noqa: E402
 
 from servers.docs_edit import engine  # noqa: E402
+from shared.arg_errors import contract_errors
 from shared.deploy_auth import build_auth, build_oauth_bridge  # noqa: E402
 from shared.json_safe import sanitize_responses  # noqa: E402
 from shared.strict_args import enforce_known_arguments
@@ -116,6 +117,13 @@ measure_responses(mcp)
 # An argument name no tool declares is dropped by the bundled FastMCP's
 # pydantic model (extra="ignore") and the call succeeds anyway. Installed
 # last so it wraps the guards above and answers first.
+# A known argument with the WRONG TYPE is rejected by pydantic before any tool
+# body runs, and escaped as a raw dump with no success/hint/token_estimate and a
+# pydantic.dev URL -- on a server whose whole point is that nothing leaves the
+# machine. Give it the fleet's failure shape instead. Installed before the
+# name guard so that guard still answers first.
+contract_errors(mcp)
+
 enforce_known_arguments(mcp)
 
 
