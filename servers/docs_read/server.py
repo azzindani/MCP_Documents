@@ -89,7 +89,7 @@ def find(
     max_hits: int = 50,
     password: str = "",
 ) -> dict:
-    """Locate text across a document. Returns page locations, not content."""
+    """Locate text: page numbers, counts, and a snippet each. Never a page."""
     return engine.find(source, query, regex, pages, max_hits, password)
 
 
@@ -107,7 +107,7 @@ def extract_tables(source: str, pages: str = "", min_confidence: float = 0.0, pa
 
 @mcp.tool(annotations=READS)
 def read_page(source: str, page: int, password: str = "") -> dict:
-    """Read one page: text, tables, links, and how each was obtained."""
+    """Read one page: text, tables, and how each was obtained."""
     return engine.read_page(source, page, password)
 
 
