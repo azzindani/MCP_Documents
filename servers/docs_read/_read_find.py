@@ -38,7 +38,7 @@ def find(
     max_hits: int = 50,
     password: str = "",
 ) -> dict:
-    """Locate text across a document. Returns page locations, not content."""
+    """Locate text: page numbers, counts, and a snippet each. Never a page."""
     progress: list[dict] = []
     if not query:
         return fail(OP, "No query given.", "Pass the text to look for, e.g. find(source, query='INVOICE').", progress)

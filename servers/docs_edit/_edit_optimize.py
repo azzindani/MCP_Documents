@@ -34,7 +34,7 @@ ACTIONS = ("compress", "repair", "linearize")
 
 
 def optimize(source: str, action: str = "compress", out: str = "") -> dict:
-    """Compress, repair or linearise a PDF. Reports the real size change."""
+    """Optimize a PDF. action: compress, repair, linearize. Reports size change."""
     op = "optimize"
     progress: list[dict] = []
     if action not in ACTIONS:
@@ -124,7 +124,7 @@ def optimize(source: str, action: str = "compress", out: str = "") -> dict:
 
 
 def ocr(source: str, pages: str = "", language: str = "eng", out: str = "") -> dict:
-    """Add a searchable text layer to scanned pages. Page range required."""
+    """Add a searchable text layer. Defaults to the pages that lack one."""
     op = "ocr"
     progress: list[dict] = []
 

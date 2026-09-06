@@ -82,19 +82,19 @@ def convert(source: str, to: str, out: str = "") -> dict:
 
 @mcp.tool(annotations=CREATES)
 def optimize(source: str, action: str = "compress", out: str = "") -> dict:
-    """Compress, repair or linearise a PDF. Reports the real size change."""
+    """Optimize a PDF. action: compress, repair, linearize. Reports size change."""
     return engine.optimize(source, action, out)
 
 
 @mcp.tool(annotations=CREATES)
 def ocr(source: str, pages: str = "", language: str = "eng", out: str = "") -> dict:
-    """Add a searchable text layer to scanned pages. Page range required."""
+    """Add a searchable text layer. Defaults to the pages that lack one."""
     return engine.ocr(source, pages, language, out)
 
 
 @mcp.tool(annotations=EDITS)
 def protect(source: str, action: str, password: str = "", out: str = "") -> dict:
-    """Encrypt, decrypt, or clear a PDF's permission flags. Needs a password."""
+    """PDF security. action: encrypt, decrypt, permissions. Needs a password."""
     return engine.protect(source, action, password, out)
 
 

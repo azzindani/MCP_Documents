@@ -47,7 +47,7 @@ ALL_ALLOWED = pikepdf.Permissions(
 
 
 def protect(source: str, action: str, password: str = "", out: str = "") -> dict:
-    """Encrypt, decrypt, or clear a PDF's permission flags. Needs a password."""
+    """PDF security. action: encrypt, decrypt, permissions. Needs a password."""
     op = "protect"
     progress: list[dict] = []
     if action not in ACTIONS:

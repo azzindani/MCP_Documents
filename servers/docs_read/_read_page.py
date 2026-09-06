@@ -20,7 +20,7 @@ from shared.progress import info, warn
 
 
 def read_page(source: str, page: int, password: str = "") -> dict:
-    """Read one page: text, tables, links, and how each was obtained."""
+    """Read one page: text, tables, and how each was obtained."""
     op = "read_page"
     progress: list[dict] = []
     try:
