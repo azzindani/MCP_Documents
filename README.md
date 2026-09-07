@@ -6,7 +6,7 @@ documents — PDF first, but not PDF only.**
 The seventh repo in the `MCP_*` fleet, and the one that closes the *research*
 leg of the research → analytics → reporting path the fleet exists to serve.
 
-> **Release [`v0.1.0`](https://github.com/azzindani/MCP_Documents/releases/tag/v0.1.0)
+> **Release [`v0.2.0`](https://github.com/azzindani/MCP_Documents/releases/tag/v0.2.0)
 > — the first tagged release.** All 13 tools are implemented and deployed; CI is
 > green on Ubuntu, macOS and Windows. Source only: no wheel and no container
 > image are published, so build the image yourself from the `Dockerfile` here.
