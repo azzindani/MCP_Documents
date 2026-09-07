@@ -17,6 +17,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 logging.basicConfig(stream=sys.stderr, level=logging.WARNING)
 
@@ -32,6 +33,7 @@ from servers.docs_edit import engine  # noqa: E402
 from shared.arg_errors import contract_errors
 from shared.deploy_auth import build_auth, build_oauth_bridge  # noqa: E402
 from shared.json_safe import sanitize_responses  # noqa: E402
+from shared.schema_enum import one_of
 from shared.strict_args import enforce_known_arguments
 from shared.token_estimate import measure_responses  # noqa: E402
 from shared.tool_annotations import CREATES, EDITS  # noqa: E402
@@ -41,6 +43,19 @@ _VERSION = "0.1.0"  # keep in sync with pyproject.toml [project].version
 _oauth_bridge = build_oauth_bridge(
     "DOCS", state_dir=os.environ.get("DOCS_EDIT_OAUTH_STATE_DIR", "/tmp/docs-edit-oauth-state")
 )
+
+# The legal values each dispatch parameter names in its schema. Rendered
+# from the table the runtime switches on -- never a second copy -- and split
+# on TYPE_CHECKING because a call expression is not a type expression to a
+# static checker, while a checker only needs to know these are strings.
+if TYPE_CHECKING:
+    To = str
+    OptimizeAction = str
+    ProtectAction = str
+else:
+    To = one_of("pdf", "txt", "md", "html", "docx", "pptx", "xlsx", "images")
+    OptimizeAction = one_of("compress", "repair", "linearize")
+    ProtectAction = one_of("encrypt", "decrypt", "permissions")
 _public_origin = os.environ.get("DOCS_PUBLIC_URL", "").rstrip("/")
 _base_url = f"{_public_origin}/edit" if _public_origin else None
 _HOST = os.environ.get("DOCS_EDIT_HOST", "127.0.0.1")
@@ -77,13 +92,13 @@ def assemble(sources: list[str], select: str, out: str) -> dict:
 
 
 @mcp.tool(annotations=CREATES)
-def convert(source: str, to: str, out: str = "") -> dict:
+def convert(source: str, to: To, out: str = "") -> dict:
     """Convert between formats: pdf, txt, md, html, images."""
     return engine.convert(source, to, out)
 
 
 @mcp.tool(annotations=CREATES)
-def optimize(source: str, action: str = "compress", out: str = "") -> dict:
+def optimize(source: str, action: OptimizeAction = "compress", out: str = "") -> dict:
     """Optimize a PDF. action: compress, repair, linearize. Reports size change."""
     return engine.optimize(source, action, out)
 
@@ -95,7 +110,7 @@ def ocr(source: str, pages: str = "", language: str = "eng", out: str = "") -> d
 
 
 @mcp.tool(annotations=EDITS)
-def protect(source: str, action: str, password: str = "", out: str = "") -> dict:
+def protect(source: str, action: ProtectAction, password: str = "", out: str = "") -> dict:
     """PDF security. action: encrypt, decrypt, permissions. Needs a password."""
     return engine.protect(source, action, password, out)
 
