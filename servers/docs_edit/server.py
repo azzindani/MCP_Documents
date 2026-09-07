@@ -38,7 +38,7 @@ from shared.strict_args import enforce_known_arguments
 from shared.token_estimate import measure_responses  # noqa: E402
 from shared.tool_annotations import CREATES, EDITS  # noqa: E402
 
-_VERSION = "0.1.0"  # keep in sync with pyproject.toml [project].version
+_VERSION = "0.2.0"  # keep in sync with pyproject.toml [project].version
 
 _oauth_bridge = build_oauth_bridge(
     "DOCS", state_dir=os.environ.get("DOCS_EDIT_OAUTH_STATE_DIR", "/tmp/docs-edit-oauth-state")
