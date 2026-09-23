@@ -32,6 +32,7 @@ from starlette.responses import JSONResponse  # noqa: E402
 from servers.docs_edit import engine  # noqa: E402
 from shared.arg_errors import contract_errors
 from shared.deploy_auth import build_auth, build_oauth_bridge  # noqa: E402
+from shared.exchange import accept_inline_files  # noqa: E402
 from shared.json_safe import sanitize_responses  # noqa: E402
 from shared.schema_enum import one_of
 from shared.strict_args import enforce_known_arguments
@@ -128,6 +129,9 @@ def redact(source: str, pattern: str, pages: str = "", regex: bool = False, out:
 # Python client. A choke point cannot be forgotten by the next tool added.
 sanitize_responses(mcp)
 measure_responses(mcp)
+# A file sent inline -- a data: URI where a path goes -- is saved to the inbox
+# and the tool sees its path; see shared/exchange.py.
+accept_inline_files(mcp)
 
 # An argument name no tool declares is dropped by the bundled FastMCP's
 # pydantic model (extra="ignore") and the call succeeds anyway. Installed
