@@ -154,6 +154,14 @@ def missing_file_hint(path: Path) -> str:
         {(_closeness(path.name, f.name), shown(f)) for f in files if _closeness(path.name, f.name) > 0},
         key=lambda pair: (-pair[0], pair[1]),
     )
+    # The exact name was found where the tool did not look: "Nothing is named X
+    # there. Closest: X" contradicted itself, so say where it is instead.
+    exact = [name for _, name in scored if Path(name).name == path.name]
+    if exact:
+        return (
+            f"{exact[0]!r} is in the data folder -- the tool looked for {path.name!r} somewhere else. "
+            f"Pass {exact[0]!r} as the path; a relative path is read from the data folder."
+        )
     if scored:
         close = ", ".join(name for _, name in scored[:5])
         return (

@@ -53,23 +53,50 @@ def recount(response: Any) -> Any:
     return response
 
 
+def with_op(response: Any, name: str) -> Any:
+    """Name the tool in a dict answer that does not name itself.
+
+    The fleet contract is `success`, `op`, `token_estimate` on every answer, and
+    a sweep census found 25 tools answering at least once without `op` -- read
+    tools even on success, and mostly failures built by helpers that leave it
+    out. A caller that dispatches on `op` could not. The tool's own name is the
+    op; an answer that already names one keeps it.
+    """
+    if not isinstance(response, dict) or "op" in response or not name:
+        return response
+    items = list(response.items())
+    response.clear()
+    placed = False
+    for key, value in items:
+        response[key] = value
+        if key == "success":
+            response["op"] = name
+            placed = True
+    if not placed:
+        response["op"] = name
+    return response
+
+
 def measure_responses(mcp: Any) -> None:
     """Measure `token_estimate` on every tool this server has registered."""
     for tool in mcp._tool_manager._tools.values():
         fn = getattr(tool, "fn", None)
         if fn is None or getattr(fn, "__token_estimate_measured__", False):
             continue
-        tool.fn = _measured(fn)
+        tool.fn = _measured(fn, tool.name)
 
 
-def _measured(fn: Any) -> Any:
+def _measured(fn: Any, name: str = "") -> Any:
     # functools.wraps carries __name__, __doc__ and __annotations__ over and
     # sets __wrapped__ so inspect.signature follows through to the original --
     # fastmcp validates arguments against that signature on every call, not
     # only at registration.
     @functools.wraps(fn)
     def measured(*a: Any, **kw: Any) -> Any:
-        return recount(fn(*a, **kw))
+        return recount(with_op(fn(*a, **kw), name))
+
+    # The op this wrapper names, visible through any wrapper installed after it.
+    measured.__op_name__ = name  # type: ignore[attr-defined]
 
     # Installing twice would double-wrap and cost a needless frame per call;
     # harmless but easy to avoid, and it makes the helper safe to call from a
