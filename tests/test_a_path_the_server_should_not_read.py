@@ -90,3 +90,25 @@ class TestLocal:
         f = tmp_path / "anywhere.txt"
         f.write_text("x", encoding="utf-8")
         assert resolve_source(str(f)) == f.resolve()
+
+
+class TestAPathOnTheCallersSideIsNamedAsOne:
+    """A claude.ai upload path is refused for what it is, with the way in.
+
+    `/mnt/user-data/uploads/Ad_Data.csv` is the only path a chat's model holds
+    for an attached file. "Outside the folders this server can use" named the
+    rule and sent it guessing folders on a server that cannot see the file.
+    """
+
+    def test_the_refusal_says_the_file_is_on_the_callers_side(self, served, monkeypatch):
+        monkeypatch.setenv("MCP_FETCH_URLS", "1")
+        with pytest.raises(PathError) as caught:
+            resolve_source("/mnt/user-data/uploads/Ad_Data.csv")
+        message = str(caught.value)
+        assert "caller's side" in message
+        assert "cannot see it" in message
+        assert "link" in message
+
+    def test_any_other_outside_path_keeps_the_plain_refusal(self, served):
+        with pytest.raises(PathError, match="outside the folders"):
+            resolve_source("/etc/hostname")

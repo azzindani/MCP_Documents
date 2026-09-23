@@ -20,6 +20,7 @@ from pathlib import Path
 
 from shared.exchange import (
     apply_default_mode,
+    client_side_refusal,
     fetch_url,
     get_output_dir,
     is_url,
@@ -71,6 +72,9 @@ def _confine(path: Path, raw: str) -> Path:
     roots = served_roots()
     if any(resolved == root or resolved.is_relative_to(root) for root in roots):
         return resolved
+    elsewhere = client_side_refusal(raw)
+    if elsewhere:
+        raise PathError(elsewhere, "The file is on the caller's side; bring it here by one of the routes named.")
     raise PathError(
         f"{raw!r} is outside the folders this server can use ({', '.join(str(r) for r in roots[:3])}).",
         "Pass a path inside the data folder (a relative path is read from it), or a URL if MCP_FETCH_URLS=1 is set.",
@@ -302,6 +306,8 @@ def _fetch_hint(message: str) -> str:
         )
     if "larger than" in lowered:
         return "Raise MCP_MAX_FETCH_MB on the server, or download the file and pass its local path."
+    if "returned a web page" in lowered:
+        return "Share the file with anyone who has the link, then pass that link again."
     return "Check the URL opens in a browser and needs no login, or download the file and pass its local path."
 
 
