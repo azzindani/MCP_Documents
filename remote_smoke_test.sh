@@ -157,6 +157,18 @@ call() {
     -d "{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"$name\",\"arguments\":$args}}"
 }
 
+echo
+echo "== paths are held to the served folders =="
+# Unconfined, any authenticated caller could read any file in the container.
+R=$(call read 9 probe '{"source":"/etc/hostname"}')
+if ok_json "$R"; then
+  fail "read /etc/hostname -- paths are not confined"
+elif echo "$R" | grep -q 'outside the folders'; then
+  pass "/etc/hostname refused as outside the served folders"
+else
+  fail "/etc/hostname refused without naming why: $(echo "$R" | head -c 300)"
+fi
+
 N=10
 LAST_R=""
 run() {

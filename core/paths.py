@@ -14,6 +14,7 @@ so a local stdio install reaches no network at all.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from shared.exchange import (
@@ -29,6 +30,50 @@ class PathError(ValueError):
     def __init__(self, message: str, hint: str) -> None:
         super().__init__(message)
         self.hint = hint
+
+
+def paths_confined() -> bool:
+    """True when paths are held to the served folders (every HTTP deployment).
+
+    A remote caller shares no filesystem with this server. Unconfined, any
+    authenticated caller could name any file the container could read --
+    /proc/self/environ holds the API keys -- and write wherever the process
+    could. A local stdio install is the caller's own machine and is unchanged.
+    """
+    return os.environ.get("MCP_CONFINE_PATHS", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def served_roots() -> list[Path]:
+    """The folders a confined server serves: the data folder, MCP_DATA_ROOT and MCP_ALLOWED_ROOTS."""
+    raws = [os.environ.get("MCP_OUTPUT_DIR", ""), os.environ.get("MCP_DATA_ROOT", "")]
+    raws += os.environ.get("MCP_ALLOWED_ROOTS", "").split(os.pathsep)
+    return [Path(r).expanduser().resolve() for r in raws if r.strip()]
+
+
+def _anchored(raw: str) -> Path:
+    """`raw` as a path, with a relative one read from the data folder when confined."""
+    path = Path(raw).expanduser()
+    if paths_confined() and not path.is_absolute():
+        path = get_output_dir() / path
+    return path
+
+
+def _confine(path: Path, raw: str) -> Path:
+    """`path` resolved, or a PathError when confined and it lies outside every served folder.
+
+    Judged after symlinks resolve, and before the file is looked for, so the
+    refusal says nothing about whether something exists out there.
+    """
+    resolved = path.resolve()
+    if not paths_confined():
+        return resolved
+    roots = served_roots()
+    if any(resolved == root or resolved.is_relative_to(root) for root in roots):
+        return resolved
+    raise PathError(
+        f"{raw!r} is outside the folders this server can use ({', '.join(str(r) for r in roots[:3])}).",
+        "Pass a path inside the data folder (a relative path is read from it), or a URL if MCP_FETCH_URLS=1 is set.",
+    )
 
 
 # Separates an archive from the member inside it: `filing.zip::instance.xbrl`.
@@ -83,7 +128,7 @@ def resolve_source(raw: str) -> Path:
             # never reached this branch at all (see core/readers.resolve) and
             # the edit tier is rarely handed a URL.
             raise PathError(str(exc), _fetch_hint(str(exc))) from exc
-    path = Path(raw).expanduser().resolve()
+    path = _confine(_anchored(raw), raw)
     if not path.exists():
         raise PathError(f"No file at {raw!r}.", "Check the path, or pass a URL if MCP_FETCH_URLS=1 is set.")
     if path.is_dir():
@@ -215,7 +260,8 @@ def resolve_out(raw: str, source: Path | None = None, suffix: str = ".pdf") -> P
         path = get_output_dir() / f"{source.stem}_out{suffix}"
     else:
         raise PathError("No output path given.", "Pass out='name.pdf'.")
-    path = path.resolve()
+    # Before mkdir: a refused path must not leave a directory behind.
+    path = _confine(path, raw or str(path))
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 

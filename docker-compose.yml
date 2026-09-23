@@ -64,6 +64,12 @@ services:
       # for any remote caller.
       MCP_OUTPUT_DIR: ${MCP_OUTPUT_DIR:-/files}
       MCP_PUBLIC_BASE_URL: ${MCP_PUBLIC_BASE_URL:-}
+      # Every source and out path must lie inside MCP_OUTPUT_DIR or a folder in
+      # MCP_ALLOWED_ROOTS (os.pathsep-separated). Without it any authenticated
+      # caller could read any file the container can. A relative path is read
+      # from MCP_OUTPUT_DIR. Leave it on for anything reachable from outside.
+      MCP_CONFINE_PATHS: ${MCP_CONFINE_PATHS:-1}
+      MCP_ALLOWED_ROOTS: ${MCP_ALLOWED_ROOTS:-}
       # Off by default. With it on, every `source` argument in this server may
       # be an http(s) URL — this is what makes "everything is fetchable" true
       # with no per-tool code. Hosts resolving to loopback/link-local/private
