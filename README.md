@@ -156,6 +156,13 @@ not public answers with a sign-in page) is refused, not parsed. A path from the
 caller's side -- a chat's sandbox such as `/mnt/user-data/…` -- is refused by
 name, with the ways to bring the file here.
 
+Where a `source` goes, a file's bytes may go instead:
+`data:application/pdf;name=report.pdf;base64,<bytes>` is saved to
+`MCP_OUTPUT_DIR/inbox/report.pdf` before the tool runs. It is for a caller
+whose file sits in its own sandbox (a claude.ai upload) with no link to give,
+capped at `MCP_MAX_INLINE_MB` (default 10); the same bytes sent twice are one
+file, and a taken name is never overwritten.
+
 ### Checking a deployment
 
 ```bash
