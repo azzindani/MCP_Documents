@@ -150,11 +150,16 @@ To give a caller a link rather than a path inside the container, point
 `public_url`. `MCP_FETCH_URLS=1` additionally lets any `source` argument be an
 http(s) link — off by default, and private, loopback and cloud-metadata
 addresses are refused even when it is on.
+A Google Drive, Docs, Dropbox, GitHub or GitLab share link is read as the file
+it points to, and a web page served where a file was asked for (a link that is
+not public answers with a sign-in page) is refused, not parsed. A path from the
+caller's side -- a chat's sandbox such as `/mnt/user-data/…` -- is refused by
+name, with the ways to bring the file here.
 
 ### Checking a deployment
 
 ```bash
-uv run python -m pytest tests/ -q                     # 408 offline tests
+uv run python -m pytest tests/ -q                     # 497 offline tests
 DOMAIN=http://localhost:8850 ./remote_smoke_test.sh   # all 13 tools over HTTP
 ```
 
