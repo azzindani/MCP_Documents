@@ -182,6 +182,16 @@ The tool answers `tool_ran: false` with the parts still missing until the last
 lands, then runs on the joined, checked file (`MCP_MAX_UPLOAD_MB`, default
 100; an upload left unfinished for an hour is dropped).
 
+Upload URLs are off by default. With `MCP_UPLOAD_URLS=1` and `MCP_UPLOAD_BASE_URL`
+(this server's public origin), the refusal for a path on the caller's side
+carries a URL minted for that file: `curl -T <file> '<url>'` from the sandbox
+writes it to `MCP_OUTPUT_DIR/inbox/`, and the answer is the path to pass. The
+bytes never pass through the model. A URL writes one file, once, within 15
+minutes, up to `MCP_MAX_UPLOAD_MB`, under the name fixed when it was minted; a
+forged, expired or spent one writes nothing. The route takes no API key -- its
+signed token (`MCP_UPLOAD_SECRET`, else a key made per process) is the
+credential -- so turning it on is the operator's decision.
+
 ### Checking a deployment
 
 ```bash
