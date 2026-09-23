@@ -423,6 +423,12 @@ through a helper that switches on the exception type.
 
 ## 9. Token Budget (STANDARDS.md §20)
 
+Two surfaces. The tier endpoints (`/read/mcp`, `/edit/mcp`) keep the budgets
+below. The domain endpoint (`/mcp`, `servers/docs_domain/`) lists two tools
+whose descriptions name every action; it is generated from the tiers by
+`shared/domain_tools.py` and never hand-written, and a new tier tool must be
+added to a domain in `DOMAINS` or a test fails.
+
 Per-response targets: `probe` ≤300, `outline` ≤400, `find` ≤600, `extract` caller
 -bounded with a hard ceiling, `extract_tables` ≤800, `read_page` ≤800,
 `to_markdown` refuses above the ceiling, all `docs-edit` tools ≤200.
