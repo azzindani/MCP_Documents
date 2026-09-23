@@ -74,6 +74,20 @@ property of user interfaces — a button cannot take an argument and an agent's
 verb can. `assemble` alone covers merge, split, extract pages, remove pages,
 organise and rotate.
 
+### One endpoint, two tools
+
+`/mcp` serves all thirteen as two domain tools, `docs_read` and `docs_edit`,
+each taking an `action` (one of the verbs above, by its own name) and an
+`args` object whose every property says which actions take it:
+
+```json
+{"action": "outline", "args": {"source": "report.pdf"}}
+```
+
+Each action runs the tier's own tool, so validation and answers are identical.
+An action asked of the wrong tool is pointed at the right one; an argument it
+does not take is refused by name. `/read/mcp` and `/edit/mcp` keep serving.
+
 ---
 
 ## Documentation
@@ -131,6 +145,7 @@ docker compose up -d --build
 
 curl http://localhost:8850/health            # aggregate
 curl http://localhost:8850/read/health       # per tier
+# connect /mcp for the two domain tools, or /read/mcp and /edit/mcp for the tiers
 ```
 
 The image carries LibreOffice and Tesseract. It does **not** carry Ghostscript

@@ -53,6 +53,7 @@ services:
       # concurrent writes.
       DOCS_READ_OAUTH_STATE_DIR: /home/app/.oauth-state/read
       DOCS_EDIT_OAUTH_STATE_DIR: /home/app/.oauth-state/edit
+      DOCS_DOMAIN_OAUTH_STATE_DIR: /home/app/.oauth-state/domain
       DOCS_OAUTH_CLIENT_ID: ${DOCS_OAUTH_CLIENT_ID:-}
       DOCS_OAUTH_CLIENT_SECRET: ${DOCS_OAUTH_CLIENT_SECRET:-}
       # Hybrid file exchange. MCP_OUTPUT_DIR doubles as the in-container mount
