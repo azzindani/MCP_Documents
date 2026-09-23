@@ -55,7 +55,9 @@ def open_document(path: str, password: str = "") -> Document:
     """
     src = Path(path)
     if not src.exists():
-        raise PdfError(f"No file at {path!r}.", "Check the path, or pass a URL if MCP_FETCH_URLS=1 is set.")
+        from core.paths import missing_file_hint
+
+        raise PdfError(f"No file at {path!r}.", missing_file_hint(src))
 
     try:
         pdf = pdfium.PdfDocument(src, password=password or None)
