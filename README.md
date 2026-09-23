@@ -162,6 +162,10 @@ Where a `source` goes, a file's bytes may go instead:
 whose file sits in its own sandbox (a claude.ai upload) with no link to give,
 capped at `MCP_MAX_INLINE_MB` (default 10); the same bytes sent twice are one
 file, and a taken name is never overwritten.
+A bigger file goes in parts: add `part=2/5;sha256=<of the whole file>` to each.
+The tool answers `tool_ran: false` with the parts still missing until the last
+lands, then runs on the joined, checked file (`MCP_MAX_UPLOAD_MB`, default
+100; an upload left unfinished for an hour is dropped).
 
 ### Checking a deployment
 
