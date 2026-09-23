@@ -34,6 +34,14 @@ def served(tmp_path, monkeypatch):
 
 
 class TestThroughTheTool:
+    def test_the_exact_name_found_elsewhere_is_said_to_be_there(self, served):
+        # Found by the sweep: "Nothing is named X there. Closest: X" -- the
+        # exact name, found where the tool did not look, reported as absent.
+        with pytest.raises(PathError) as exc:
+            resolve_source("archive/Q3_Report.pdf")
+        assert "Nothing is named" not in exc.value.hint
+        assert "'Q3_Report.pdf' is in the data folder" in exc.value.hint
+
     def test_a_case_fold_away_is_named(self, served):
         if (served / "q3_report.pdf").exists():
             pytest.skip("case-insensitive filesystem: the file is found, nothing to suggest")
