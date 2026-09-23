@@ -14,6 +14,7 @@ so a local stdio install reaches no network at all.
 
 from __future__ import annotations
 
+import difflib
 import os
 from pathlib import Path
 
@@ -76,6 +77,92 @@ def _confine(path: Path, raw: str) -> Path:
     )
 
 
+_NEAR_DEPTH = 2
+_NEAR_ENTRIES = 2000
+
+
+def _files_under(folder: Path) -> list[Path]:
+    """Files under `folder`, at most two folders deep and 2,000 entries in all, hidden ones skipped."""
+    found: list[Path] = []
+    seen = 0
+    base = len(folder.parts)
+    for dirpath, dirnames, filenames in os.walk(folder):
+        here = Path(dirpath)
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith((".", "__")))
+        if len(here.parts) - base >= _NEAR_DEPTH:
+            dirnames[:] = []
+        for name in sorted(filenames):
+            seen += 1
+            if seen > _NEAR_ENTRIES:
+                return found
+            # `.mcp_` marks this fleet's own bookkeeping beside a file -- a
+            # receipt, a lineage record -- never something a caller would pass.
+            if not name.startswith(".") and ".mcp_" not in name:
+                found.append(here / name)
+    return found
+
+
+def _closeness(wanted: str, candidate: str) -> float:
+    """How close a file name is to the one asked for; 0 for unrelated."""
+    w, c = wanted.lower(), candidate.lower()
+    if w == c:
+        return 3.0  # the same name in other letters: Report.PDF for report.pdf
+    if Path(w).stem == Path(c).stem:
+        return 2.0  # the extension misremembered: .docx for .pdf
+    ratio = difflib.SequenceMatcher(None, w, c).ratio()
+    return ratio if ratio >= 0.6 else 0.0
+
+
+def missing_file_hint(path: Path) -> str:
+    """The recovery for a file that is not there: the nearest files that are.
+
+    "Check the path" is no help to a remote caller -- it shares no filesystem
+    with this server and cannot look. The file it meant, one case-fold or one
+    extension away, was visible only to the server. Searches the folder the
+    caller named and, when confined, the data folder; on a confined server a
+    folder outside the served ones is never searched, so a suggestion cannot
+    name a file the server would refuse to read.
+    """
+    fallback = "Check the path, or pass a URL if MCP_FETCH_URLS=1 is set."
+    folders = [path.parent]
+    if paths_confined():
+        folders.append(get_output_dir())
+    usable: list[Path] = []
+    for folder in folders:
+        try:
+            folder = _confine(folder, str(folder))
+        except PathError, OSError:
+            continue
+        if folder.is_dir() and folder not in usable:
+            usable.append(folder)
+    if not usable:
+        return fallback
+    # Relative to the data folder when confined, since that is what a relative
+    # path means there; absolute otherwise. Not get_output_dir() on a local
+    # install: it creates ~/Downloads as a side effect of giving advice.
+    root = get_output_dir().resolve() if paths_confined() else None
+
+    def shown(f: Path) -> str:
+        return str(f.relative_to(root)) if root is not None and f.is_relative_to(root) else str(f)
+
+    files = [f for folder in usable for f in _files_under(folder)]
+    scored = sorted(
+        {(_closeness(path.name, f.name), shown(f)) for f in files if _closeness(path.name, f.name) > 0},
+        key=lambda pair: (-pair[0], pair[1]),
+    )
+    if scored:
+        close = ", ".join(name for _, name in scored[:5])
+        return (
+            f"Nothing is named {path.name!r} there. Closest: {close}. "
+            "Pass one of those; a relative path is read from the data folder."
+        )
+    if paths_confined() and files:
+        listed = sorted({shown(f) for f in files})
+        more = f" (+{len(listed) - 8} more)" if len(listed) > 8 else ""
+        return f"Nothing like {path.name!r} is in the data folder. It holds: {', '.join(listed[:8])}{more}."
+    return fallback
+
+
 # Separates an archive from the member inside it: `filing.zip::instance.xbrl`.
 # Two colons rather than one because a Windows path starts `C:\` and a URL
 # contains `https://`, and a single colon would make both ambiguous.
@@ -130,7 +217,7 @@ def resolve_source(raw: str) -> Path:
             raise PathError(str(exc), _fetch_hint(str(exc))) from exc
     path = _confine(_anchored(raw), raw)
     if not path.exists():
-        raise PathError(f"No file at {raw!r}.", "Check the path, or pass a URL if MCP_FETCH_URLS=1 is set.")
+        raise PathError(f"No file at {raw!r}.", missing_file_hint(path))
     if path.is_dir():
         raise PathError(f"{raw!r} is a directory, not a document.", "Pass the path of a single file.")
     return path

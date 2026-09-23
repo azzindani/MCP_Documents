@@ -36,13 +36,14 @@ def guard_size(path: str) -> Path:
     Deliberately by stat rather than by reading: the point is to answer without
     paying the cost being refused.
     """
+    from core.paths import missing_file_hint
     from core.readers import ReaderError
 
     src = Path(path)
     if not src.exists():
         raise ReaderError(
             f"No file at {path!r}.",
-            "Check the path, or pass a URL if MCP_FETCH_URLS=1 is set.",
+            missing_file_hint(src),
         )
     size = src.stat().st_size
     ceiling = budget.max_source_bytes()
