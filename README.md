@@ -119,7 +119,9 @@ This ships it, labels it, and tells you when a document is a poor candidate.
 ## Install
 
 Requires Python **3.14** and `uv`. Set `MCP_CONSTRAINED_MODE=1` on small
-hardware to tighten every budget.
+hardware to tighten every budget. A caller's regular expression, in `find` and
+in `redact`, runs in a worker that is stopped after `DOCS_REGEX_SECONDS` of
+matching (10, 5 constrained) and refused by name.
 
 ### Local, as a stdio server
 

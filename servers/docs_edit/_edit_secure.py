@@ -21,11 +21,13 @@ from decimal import Decimal
 
 import pikepdf
 
+from core import budget
 from core.formatter import fail, ok
 from core.paths import PathError, finish, require_pdf, resolve_out, resolve_source
 from core.selection import SelectionError, format_pages, parse_pages
 from shared.progress import info, warn
 from shared.progress import ok as ok_step
+from shared.regex_guard import Guard, PatternTimeout
 
 ACTIONS = ("encrypt", "decrypt", "permissions")
 
@@ -222,8 +224,16 @@ def redact(source: str, pattern: str, pages: str = "", regex: bool = False, out:
     except PathError as exc:
         return fail(op, str(exc), exc.hint, progress)
 
+    # A caller's pattern is matched in a worker the server can stop
+    # (shared/regex_guard): Python's re has no timeout, and a pattern with
+    # nested repeats would otherwise hold this call for good. An escaped
+    # literal cannot backtrack and stays in-process.
     try:
-        matcher = re.compile(pattern if regex else re.escape(pattern), re.IGNORECASE)
+        matcher: re.Pattern[str] | Guard = (
+            Guard(pattern, re.IGNORECASE, limit=budget.regex_seconds())
+            if regex
+            else re.compile(re.escape(pattern), re.IGNORECASE)
+        )
     except re.error as exc:
         return fail(
             op,
@@ -231,7 +241,15 @@ def redact(source: str, pattern: str, pages: str = "", regex: bool = False, out:
             "Pass regex=False to match it literally.",
             progress,
         )
+    try:
+        return _redact(op, src, destination, pages, matcher, progress)
+    finally:
+        if isinstance(matcher, Guard):
+            matcher.close()
 
+
+def _redact(op: str, src, destination, pages: str, matcher: re.Pattern[str] | Guard, progress: list[dict]) -> dict:
+    """The redaction proper: strip the matching runs, write the file, then prove it."""
     try:
         handle = pikepdf.open(src)
     except pikepdf.PdfError as exc:
@@ -254,6 +272,17 @@ def redact(source: str, pattern: str, pages: str = "", regex: bool = False, out:
                 touched.append(number)
         handle.save(destination)
         finish(destination)
+    except PatternTimeout as exc:
+        handle.close()
+        return fail(
+            op,
+            str(exc),
+            "Nothing was written. Rewrite the pattern without a quantifier inside a quantifier, "
+            "or pass regex=False to match it literally.",
+            progress,
+            refused="budget",
+            limit=f"{exc.limit:g}s",
+        )
     except (pikepdf.PdfError, OSError) as exc:
         handle.close()
         return fail(
@@ -267,7 +296,20 @@ def redact(source: str, pattern: str, pages: str = "", regex: bool = False, out:
     # gone. Without this the tool is a claim; with it, it is a check. A
     # redaction that reports success it did not verify is the failure this
     # whole design exists to prevent.
-    residual = _still_extractable(destination, matcher, wanted)
+    try:
+        residual = _still_extractable(destination, matcher, wanted)
+    except PatternTimeout as exc:
+        return fail(
+            op,
+            f"Redaction could not be verified: {exc}",
+            "Do not distribute this file: the pattern ran out of time before the check finished.",
+            progress,
+            out=str(destination),
+            redacted=removed,
+            verified=False,
+            refused="budget",
+            limit=f"{exc.limit:g}s",
+        )
     result = {
         "out": str(destination),
         "redacted": removed,
@@ -289,7 +331,7 @@ def redact(source: str, pattern: str, pages: str = "", regex: bool = False, out:
     return ok(op, result, progress)
 
 
-def _strip_from_page(pdf: pikepdf.Pdf, page: pikepdf.Page, matcher: re.Pattern) -> int:
+def _strip_from_page(pdf: pikepdf.Pdf, page: pikepdf.Page, matcher: re.Pattern[str] | Guard) -> int:
     """Delete text-showing operators whose text matches, in the content stream.
 
     Operates on the content stream itself rather than drawing over the page,
@@ -456,7 +498,7 @@ def _utf16be(hex_digits: str, offset: int = 0) -> str:
     return raw.decode("utf-16-be", "replace")
 
 
-def _still_extractable(path, matcher: re.Pattern, pages: list[int]) -> list[int]:
+def _still_extractable(path, matcher: re.Pattern[str] | Guard, pages: list[int]) -> list[int]:
     """Which pages still yield the pattern when read back. The proof."""
     import pypdfium2 as pdfium
 
