@@ -53,7 +53,9 @@ HTML came from disk or the web.
 
 **Bundles open too.** A `.zip` reads as its manifest, and a member is read by
 naming it — `probe("filing.zip::instance.xbrl")` — so a filing that arrives as
-an archive does not have to be unpacked by hand first.
+an archive does not have to be unpacked by hand first. A member this server does
+not read, or one wanted as a file, is saved as it is with
+`convert(source="filing.zip::data.csv", to="file")`, after the same size guards.
 
 **XBRL figures come back `native`.** Every other format's numbers are recovered
 from layout and carry a confidence to match; an XBRL instance states its facts

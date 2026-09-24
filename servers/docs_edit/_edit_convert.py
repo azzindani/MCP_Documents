@@ -17,6 +17,9 @@ flattening them into one word.
                 coordinates. Not implemented here, and refused with the reason
                 rather than shipped badly. See below.
 
+    TO file     from a .zip member, `archive.zip::member` -- its own bytes,
+                saved where outputs go. See _save_member.
+
 **Never route pdf -> docx through LibreOffice's Draw import filter.** It
 produces a document in which every line of text is a separate floating text
 box. It opens, it contains the right words, it is unusable, and it reports
@@ -66,7 +69,7 @@ TO_PDF_INPUTS = {
 # which rasterises and so still needs a PDF.
 TEXT_TARGETS = {"txt", "md", "html", "images"}
 RECONSTRUCTION_TARGETS = {"docx", "xlsx", "pptx"}
-TARGETS = TEXT_TARGETS | RECONSTRUCTION_TARGETS | {"pdf"}
+TARGETS = TEXT_TARGETS | RECONSTRUCTION_TARGETS | {"pdf", "file"}
 
 # LibreOffice's first run initialises a profile and is far slower than the
 # rest. A timeout below that turns a working conversion into a mystery.
@@ -74,7 +77,7 @@ SOFFICE_TIMEOUT_S = 180.0
 
 
 def convert(source: str, to: str, out: str = "") -> dict:
-    """Convert between formats: pdf, txt, md, html, images."""
+    """Convert to pdf, txt, md, html, images; file saves a.zip::member as is."""
     progress: list[dict] = []
     target = to.strip().lower().lstrip(".")
     if target not in TARGETS:
@@ -84,6 +87,9 @@ def convert(source: str, to: str, out: str = "") -> dict:
             f"Use one of: {', '.join(sorted(TARGETS))}.",
             progress,
         )
+
+    if target == "file":
+        return _save_member(source, out, progress)
 
     try:
         src = resolve_source(source)
@@ -304,6 +310,48 @@ def _to_images(src: Path, out: str, progress: list[dict]) -> dict:
 
     progress.append(ok_step(f"rendered {len(written)} page(s) at {dpi} DPI"))
     return ok(OP, {"out": str(directory), "to": "images", "dpi": dpi, "files": len(written)}, progress, basis="native")
+
+
+def _save_member(source: str, out: str, progress: list[dict]) -> dict:
+    """One member of a .zip saved as a file of its own: `to='file'`.
+
+    Reading a member (`probe('a.zip::x.xbrl')`) extracts it into the inbox, a
+    directory the caller never sees, so a member this server does not read --
+    a CSV for the data server, an image -- could be listed and never had. This
+    saves it where outputs go, byte for byte. A target on convert rather than a
+    14th tool (docs/DECISIONS.md §3): leaving an archive is a change of form.
+
+    The archive first passes the guards probe applies -- member count, total
+    expanded bytes, ratio -- and the member the per-member ceiling and the
+    unsafe-name refusal every `::` read goes through.
+    """
+    from core.paths import ARCHIVE_SUFFIXES, MEMBER_SEPARATOR
+    from core.readers import ReaderError
+    from core.readers import archive as zip_reader
+
+    archive, separator, member = source.strip().partition(MEMBER_SEPARATOR)
+    if not separator or Path(archive).suffix.lower() not in ARCHIVE_SUFFIXES:
+        return fail(
+            OP,
+            f"to='file' saves one member of a .zip archive, and {source!r} names none.",
+            "Pass source='archive.zip::member'; probe('archive.zip') lists the members.",
+            progress,
+        )
+    name = Path(member.strip().replace("\\", "/")).name
+    try:
+        zip_reader.open_document(str(resolve_source(archive)))
+        extracted = resolve_source(source)
+        destination = resolve_out(out, Path(name), Path(name).suffix)
+    except (PathError, ReaderError) as exc:
+        return fail(OP, str(exc), exc.hint, progress)
+    shutil.copyfile(extracted, destination)
+    finish(destination)
+
+    size = destination.stat().st_size
+    progress.append(ok_step(f"saved {name} from {Path(archive).name}", f"{size:,} bytes"))
+    return ok(
+        OP, {"out": str(destination), "to": "file", "member": member.strip(), "bytes": size}, progress, basis="native"
+    )
 
 
 def _refuse_reconstruction(src: Path, target: str, progress: list[dict]) -> dict:
