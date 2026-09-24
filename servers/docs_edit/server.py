@@ -54,7 +54,7 @@ if TYPE_CHECKING:
     OptimizeAction = str
     ProtectAction = str
 else:
-    To = one_of("pdf", "txt", "md", "html", "docx", "pptx", "xlsx", "images")
+    To = one_of("pdf", "txt", "md", "html", "docx", "pptx", "xlsx", "images", "file")
     OptimizeAction = one_of("compress", "repair", "linearize")
     ProtectAction = one_of("encrypt", "decrypt", "permissions")
 _public_origin = os.environ.get("DOCS_PUBLIC_URL", "").rstrip("/")
@@ -94,7 +94,7 @@ def assemble(sources: list[str], select: str, out: str) -> dict:
 
 @mcp.tool(annotations=CREATES)
 def convert(source: str, to: To, out: str = "") -> dict:
-    """Convert between formats: pdf, txt, md, html, images."""
+    """Convert to pdf, txt, md, html, images; file saves a.zip::member as is."""
     return engine.convert(source, to, out)
 
 

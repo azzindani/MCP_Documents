@@ -382,6 +382,12 @@ MEMBER_HITS=$(extract_num "$LAST_R" hits)
   pass "the filed value is returned exactly, unrescaled ($MEMBER_HITS hit)" ||
   fail "the filed figure was not found in the member"
 
+run edit convert "{\"source\":\"$D/bundle.zip::report.html\",\"to\":\"file\",\"out\":\"$D/from_bundle.html\"}" \
+  "save report.html out of the bundle as a file"
+docker exec "$CONTAINER" python3 -c "import sys; sys.exit(open('$HTML','rb').read() != open('$D/from_bundle.html','rb').read())" &&
+  pass "the member is saved byte for byte" ||
+  fail "the saved member differs from what was zipped"
+
 expect read probe "{\"source\":\"$D/bundle.zip::../../etc/passwd\"}" "escape the archive"
 echo "$LAST_R" | grep -q 'safe member' &&
   pass "a member path that walks upward is refused" ||
