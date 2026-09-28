@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from shared.arg_errors import looks_like_validation
+from shared.arg_errors import explain, looks_like_validation
 
 _READ_ONLY = "readOnlyHint"
 _DESTRUCTIVE = "destructiveHint"
@@ -137,9 +137,14 @@ def register_domain(
             if not looks_like_validation(str(exc)):
                 raise
             required = (tool.parameters or {}).get("required") or []
+            # The first line alone is pydantic's header -- "1 validation error
+            # for tune_hyperparametersArguments" -- which names neither the
+            # argument nor what it should have been.
+            problems = explain(str(exc))
+            detail = "; ".join(f"{field}: {why}" for field, why in problems) or str(exc).splitlines()[0]
             return _refusal(
                 name,
-                f"{action} rejected its arguments: {str(exc).splitlines()[0]}",
+                f"{action} rejected its arguments: {detail}",
                 f"{action} takes ({_signature(tool)}); required: {', '.join(required) or 'none'}.",
             )
 
