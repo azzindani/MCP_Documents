@@ -1,8 +1,8 @@
 """One member of a .zip, saved as a file of its own: convert(to="file").
 
 A member could be listed (probe("a.zip")) and read (probe("a.zip::x.xbrl")),
-and never had: reading extracts it into the inbox, a directory the caller does
-not see, and a member this server has no reader for -- a CSV for the data
+and never had: reading extracts it into a cache private to the server, which
+the caller does not see, and a member this server has no reader for -- a CSV for the data
 server, an image -- could not be reached at all. There is no shell here, so
 "unzip it first" is not advice a caller can take.
 

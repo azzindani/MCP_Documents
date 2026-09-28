@@ -56,6 +56,8 @@ naming it — `probe("filing.zip::instance.xbrl")` — so a filing that arrives 
 an archive does not have to be unpacked by hand first. A member this server does
 not read, or one wanted as a file, is saved as it is with
 `convert(source="filing.zip::data.csv", to="file")`, after the same size guards.
+Reading a member writes nothing where outputs go: it is unpacked into a cache
+private to the server (`DOCS_MEMBER_CACHE`, default under the system temp folder).
 
 **XBRL figures come back `native`.** Every other format's numbers are recovered
 from layout and carry a confidence to match; an XBRL instance states its facts

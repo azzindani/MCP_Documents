@@ -235,13 +235,28 @@ def resolve_source(raw: str) -> Path:
     return path
 
 
+def member_cache() -> Path:
+    """Where archive members are unpacked to be read: this server's own temp space, mode 700.
+
+    DOCS_MEMBER_CACHE overrides it. Never under MCP_OUTPUT_DIR: what is written
+    there is the user's, and reading a document must not add to it.
+    """
+    import os
+    import tempfile
+
+    root = Path(os.environ.get("DOCS_MEMBER_CACHE", "").strip() or Path(tempfile.gettempdir()) / "docs-archive-members")
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return root
+
+
 def _resolve_member(archive: str, member: str) -> Path:
     """Extract one member of an archive and return the path it was written to.
 
-    Into the inbox, which is already where this server puts material it pulled
-    in from somewhere else (a fetched URL lands there too), so an extracted
-    member inherits that directory's lifecycle instead of inventing a second
-    one. The name carries the archive's stem, its mtime and its size, so a
+    Into a cache private to this server (`member_cache`), never a folder it
+    serves. It used to be the inbox, MCP_OUTPUT_DIR/inbox -- on a deployment
+    that is the user's own folder, so a read-only probe of `a.zip::member`
+    left a copy of the member there, and convert(to="file", out=elsewhere)
+    left two. The name carries the archive's stem, its mtime and its size, so a
     re-packed archive re-extracts rather than serving a stale member -- the
     same reasoning as the reader cache key, which this then keys off.
 
@@ -250,8 +265,6 @@ def _resolve_member(archive: str, member: str) -> Path:
     the XBRL reader with no archive-specific code anywhere above this line.
     """
     import zipfile
-
-    from shared.exchange import get_inbox_dir
 
     if not member.strip():
         raise PathError(
@@ -275,7 +288,7 @@ def _resolve_member(archive: str, member: str) -> Path:
                     f"over the {ceiling / 1_048_576:.0f} MB limit.",
                     "Extract it outside this server and pass its path.",
                 )
-            target = get_inbox_dir() / f"{source.stem}-{int(stat.st_mtime)}-{stat.st_size}-{Path(info.filename).name}"
+            target = member_cache() / f"{source.stem}-{int(stat.st_mtime)}-{stat.st_size}-{Path(info.filename).name}"
             if not target.exists() or target.stat().st_size != info.file_size:
                 with zf.open(info) as handle:
                     # Bounded by the size check above, so a lying central
