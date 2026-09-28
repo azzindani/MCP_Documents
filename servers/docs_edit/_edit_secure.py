@@ -232,7 +232,7 @@ def redact(source: str, pattern: str, pages: str = "", regex: bool = False, out:
         matcher: re.Pattern[str] | Guard = (
             Guard(pattern, re.IGNORECASE, limit=budget.regex_seconds())
             if regex
-            else re.compile(re.escape(pattern), re.IGNORECASE)
+            else re.compile(_literal(pattern), re.IGNORECASE)
         )
     except re.error as exc:
         return fail(
@@ -262,18 +262,26 @@ def _redact(op: str, src, destination, pages: str, matcher: re.Pattern[str] | Gu
         return fail(op, str(exc), exc.hint, progress)
 
     removed = 0
+    beyond = 0
     touched: list[int] = []
+    # Written beside the destination and moved into place only once verified:
+    # a redaction that fails its check must not leave a file at the requested
+    # path. It used to, with "Do not distribute this file" in the hint -- and a
+    # file named *_redacted.pdf still carrying the name is exactly the file
+    # someone distributes.
+    staging = destination.with_name(f".{destination.stem}.unverified{destination.suffix}")
     try:
         for number in wanted:
             page = handle.pages[number - 1]
-            count = _strip_from_page(handle, page, matcher)
+            count, collateral = _strip_from_page(handle, page, matcher)
             if count:
                 removed += count
+                beyond += collateral
                 touched.append(number)
-        handle.save(destination)
-        finish(destination)
+        handle.save(staging)
     except PatternTimeout as exc:
         handle.close()
+        staging.unlink(missing_ok=True)
         return fail(
             op,
             str(exc),
@@ -285,26 +293,35 @@ def _redact(op: str, src, destination, pages: str, matcher: re.Pattern[str] | Gu
         )
     except (pikepdf.PdfError, OSError) as exc:
         handle.close()
+        staging.unlink(missing_ok=True)
         return fail(
             op, f"Could not write {destination.name}: {exc}", "Check the output directory is writable.", progress
         )
     handle.close()
 
     progress.append(info(f"removed {removed} text run(s) from {len(touched)} page(s)"))
+    if beyond:
+        progress.append(
+            warn(
+                f"{beyond} of those run(s) also drew text outside the match, and went with it",
+                "this file sets several words in one run; a run is removed whole, never cut",
+            )
+        )
 
     # THE VERIFICATION. Re-extract the written file and confirm the pattern is
     # gone. Without this the tool is a claim; with it, it is a check. A
     # redaction that reports success it did not verify is the failure this
     # whole design exists to prevent.
     try:
-        residual = _still_extractable(destination, matcher, wanted)
+        residual = _still_extractable(staging, matcher, wanted)
     except PatternTimeout as exc:
+        staging.unlink(missing_ok=True)
         return fail(
             op,
             f"Redaction could not be verified: {exc}",
-            "Do not distribute this file: the pattern ran out of time before the check finished.",
+            "Nothing was written: the pattern ran out of time before the check finished.",
             progress,
-            out=str(destination),
+            written=False,
             redacted=removed,
             verified=False,
             refused="budget",
@@ -313,52 +330,64 @@ def _redact(op: str, src, destination, pages: str, matcher: re.Pattern[str] | Gu
     result = {
         "out": str(destination),
         "redacted": removed,
+        "removed_beyond_match": beyond,
         "pages": format_pages(touched),
         "verified": not residual,
         "residual_matches": len(residual),
     }
     if residual:
+        staging.unlink(missing_ok=True)
         progress.append(warn("the pattern is still extractable from the output", f"pages {format_pages(residual)}"))
         return fail(
             op,
-            f"Redaction could not be verified: the pattern is still extractable on page(s) {format_pages(residual)}.",
-            "Do not distribute this file. The text is likely drawn with a subset font whose bytes do not "
-            "match the pattern; extract(pages=...) to see how it is encoded.",
+            f"Redaction could not be verified: the pattern is still extractable on page(s) {format_pages(residual)}. "
+            "Nothing was written.",
+            "The text is likely drawn with a font whose codes do not decode to the pattern; "
+            "extract(pages=...) shows how the page reads.",
             progress,
-            **result,
+            **{**result, "out": None, "written": False},
         )
+    staging.replace(destination)
+    finish(destination)
     progress.append(ok_step("verified: the pattern is no longer extractable"))
     return ok(op, result, progress)
 
 
-def _strip_from_page(pdf: pikepdf.Pdf, page: pikepdf.Page, matcher: re.Pattern[str] | Guard) -> int:
-    """Delete text-showing operators whose text matches, in the content stream.
+def _strip_from_page(pdf: pikepdf.Pdf, page: pikepdf.Page, matcher: re.Pattern[str] | Guard) -> tuple[int, int]:
+    """Delete the text-showing operators a match covers; return (removed, removed beyond the match).
 
     Operates on the content stream itself rather than drawing over the page,
     because drawing leaves the glyphs behind for any extractor to read. Tj and
     ' take a single string; TJ takes an array of strings and kerning numbers.
 
+    **The pattern is matched across runs, not inside one.** Each run was tested
+    on its own, and a producer that draws one glyph per operator -- 367 Tj on a
+    SuperStore invoice, `V`, `i`, `v`, `e`, `k` -- never has a run holding
+    "Vivek Grady", so nothing was removed and the check refused the file. The
+    runs are now joined in stream order, the pattern is matched once over the
+    whole, and every run the match touches goes. A run that also carries text
+    outside the match goes whole too (a run is never cut, which would move the
+    glyphs after the cut), and is counted as removed beyond the match.
+
     **The operand bytes are not the text.** They were read as Latin-1 here,
     which is true only of a PDF whose text is set in a base-14 font with no
-    subsetting -- the fixture corpus, and almost nothing produced by real
-    software. LibreOffice, Word and every modern producer embed a SUBSET font
-    and address it by glyph index, so `1450.50` reaches this function as
-    b'\\x1e\\x00\\x00\\x00!" ...'. Matching that against the pattern found
-    nothing, removed nothing, and the verification step then refused the file.
-    The refusal was correct and the capability was absent: a redaction that
-    cannot redact a PDF made by a word processor is not a redaction tool.
+    subsetting. LibreOffice, Word and every modern producer embed a SUBSET font
+    and address it by glyph index, so each font's /ToUnicode CMap is used to turn
+    glyph codes back into the text they draw, and the current font is tracked
+    through Tf. Where a font has no /ToUnicode, the Latin-1 reading stands.
 
-    So each font's /ToUnicode CMap is used to turn glyph codes back into the
-    text they draw, and the current font is tracked through Tf. Where a font
-    has no /ToUnicode there is nothing to decode with and the Latin-1 reading
-    stands, which is the old behaviour for the old case.
+    `'` and `"` also move to the next line; a deleted one leaves its T* (and the
+    spacing `"` sets) behind, so the lines under it do not move up.
     """
     decoders = _font_decoders(page)
     decode: Callable[[bytes], str] | None = None
-    removed = 0
-    instructions = []
+    instructions: list = []
+    runs: list[tuple[int, int, int]] = []
+    parts: list[str] = []
+    length = 0
     for operands, operator in pikepdf.parse_content_stream(page):
         name = str(operator)
+        text: str | None = None
         if name == "Tf" and operands:
             # Tf is `/F1 12 Tf`: the resource name, then the size. Every
             # text-showing operator after it draws in that font until the next
@@ -366,35 +395,76 @@ def _strip_from_page(pdf: pikepdf.Pdf, page: pikepdf.Page, matcher: re.Pattern[s
             decode = decoders.get(str(operands[0]))
         elif name in {"Tj", "'", '"'} and operands:
             text = _as_text(operands[-1], decode)
-            if text and matcher.search(text):
-                removed += 1
-                continue
         elif name == "TJ" and operands:
-            array = operands[0]
             # A TJ operand is an Array of strings and kerning numbers, and the
-            # numbers have to be SKIPPED rather than converted. pikepdf hands
-            # them back as Python ints, and `bytes(3)` is not the digit 3 -- it
-            # is three NUL bytes, because bytes(int) allocates that many zeros.
-            # So each kern spliced NULs into the middle of the text (or raised
-            # ValueError for a negative kern, dropping that run entirely), and
-            # `1450.50` set with kerning could never match the pattern
-            # `1450.50` however it was encoded. The old comment here said the
-            # numbers were dropped; nothing dropped them.
-            #
-            # pyright types the operand as the generic Object and does not know
-            # it is iterable. It is.
-            joined = "".join(
+            # numbers have to be SKIPPED rather than converted: `bytes(3)` is
+            # three NUL bytes, not the digit 3. pyright types the operand as the
+            # generic Object and does not know it is iterable. It is.
+            text = "".join(
                 _as_text(item, decode) or ""
-                for item in array  # type: ignore[union-attr]
+                for item in operands[0]  # type: ignore[union-attr]
                 if not isinstance(item, (int, float, Decimal))
             )
-            if joined and matcher.search(joined):
-                removed += 1
-                continue
+        if text:
+            runs.append((len(instructions), length, length + len(text)))
+            parts.append(text)
+            length += len(text)
         instructions.append((operands, operator))
-    if removed:
-        page.Contents = pdf.make_stream(pikepdf.unparse_content_stream(instructions))
-    return removed
+    spans = _spans(matcher, "".join(parts))
+    doomed: dict[int, bool] = {}
+    for index, start, end in runs:
+        for lo, hi in spans:
+            if start < hi and lo < end:
+                doomed[index] = doomed.get(index, False) or start < lo or end > hi
+    if not doomed:
+        return 0, 0
+    kept: list = []
+    for index, (operands, operator) in enumerate(instructions):
+        if index not in doomed:
+            kept.append((operands, operator))
+        elif str(operator) == "'":
+            kept.append(([], pikepdf.Operator("T*")))
+        elif str(operator) == '"':
+            kept += [
+                ([operands[0]], pikepdf.Operator("Tw")),
+                ([operands[1]], pikepdf.Operator("Tc")),
+                ([], pikepdf.Operator("T*")),
+            ]
+    page.Contents = pdf.make_stream(pikepdf.unparse_content_stream(kept))
+    return len(doomed), sum(doomed.values())
+
+
+_OPEN, _CLOSE = "\x01", "\x02"
+
+
+def _spans(matcher: re.Pattern[str] | Guard, text: str) -> list[tuple[int, int]]:
+    """Where the pattern matches in `text`, as (start, end), empty matches dropped.
+
+    The guard answers yes/no and substitutions, not positions, so each match is
+    wrapped in two control characters by a substitution and the spans are read
+    back from where they landed. The text is cleared of both characters first.
+    """
+    clean = text.replace(_OPEN, " ").replace(_CLOSE, " ")
+    marked, count = matcher.subn(_OPEN + r"\g<0>" + _CLOSE, clean)
+    if not count:
+        return []
+    spans: list[tuple[int, int]] = []
+    position, start = 0, 0
+    for char in marked:
+        if char == _OPEN:
+            start = position
+        elif char == _CLOSE:
+            if position > start:
+                spans.append((start, position))
+        else:
+            position += 1
+    return spans
+
+
+def _literal(pattern: str) -> str:
+    """A literal pattern whose words may be drawn with or without a space glyph between them."""
+    words = pattern.split()
+    return r"\s*".join(re.escape(word) for word in words) if words else re.escape(pattern)
 
 
 def _as_text(operand, decode: Callable[[bytes], str] | None = None) -> str | None:

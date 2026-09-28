@@ -120,12 +120,12 @@ class TestItIsSilentWhenThereIsNothingToSay:
 
 class TestAFailedRedactionIsNotPublished:
     def test_an_unverified_redaction_carries_no_public_url(self, exchange, monkeypatch, corpus):
-        """Its own hint says "Do not distribute this file"."""
+        """Nor a file: an unverified redaction is no longer written at all."""
         # Force the failure the way it happens in life: nothing matched, so the
-        # pattern is still extractable from the output.
-        monkeypatch.setattr("servers.docs_edit._edit_secure._strip_from_page", lambda *a, **k: 0)
+        # pattern is still extractable from the output. (removed, removed beyond the match)
+        monkeypatch.setattr("servers.docs_edit._edit_secure._strip_from_page", lambda *a, **k: (0, 0))
         payload = edit.redact(str(corpus["born_digital"]), "quick brown fox", out="unverified.pdf")
         assert payload["success"] is False
         assert payload["verified"] is False
         assert "public_url" not in payload
-        assert "Do not distribute" in payload["hint"]
+        assert payload["written"] is False and "Nothing was written" in payload["error"]
