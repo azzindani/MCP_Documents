@@ -18,7 +18,7 @@ import re
 from core import budget, scan
 from core.formatter import fail, ok, refuse
 from core.ir import weakest_basis
-from core.readers import ReaderError, load_page, open_source
+from core.readers import ReaderError, load_page, open_source, search_text
 from core.selection import SelectionError, format_pages, parse_pages
 from shared.counts import counted
 from shared.progress import info, warn
@@ -64,14 +64,17 @@ def find(
     ceiling = min(max_hits, budget.max_response_tokens() // 20)
     scanned_without_text = 0
     searchable: list[int] = []
-    texts: list[str] = []
+    readings: list[tuple[str, ...]] = []
     for number in wanted:
         page = load_page(doc, number)
         if page.is_scanned:
             scanned_without_text += 1
             continue
         searchable.append(number)
-        texts.append(page.text)
+        # As drawn, and -- where the drawing climbs back up the page -- as it
+        # reads; the scan searches the one the pattern matches more of.
+        ordered = search_text(doc, number)
+        readings.append((page.text,) if ordered == page.text else (page.text, ordered))
 
     # A pattern the CALLER wrote runs in a child process that can be killed.
     # `re` has no timeout and no step limit, and `(\s*\w+)+$` against one page
@@ -80,7 +83,9 @@ def find(
     # the response or the log to say why. A literal query has been through
     # re.escape, holds no quantifier, and stays in-process. See core/scan.py.
     try:
-        hits, raw, where = scan.matches_of(texts, pattern.pattern, pattern.flags, ceiling, guarded=regex)
+        hits, raw, where, chosen = scan.matches_in_readings(
+            readings, pattern.pattern, pattern.flags, ceiling, guarded=regex
+        )
     except scan.ScanTimeout as exc:
         return refuse(
             OP,
@@ -89,10 +94,11 @@ def find(
             "Give the inner part a fixed width, anchor the pattern, or narrow the search with pages=. "
             "A literal search (regex=False) is never affected.",
             limit=f"{exc.seconds:g}s",
-            seen=f"{len(texts)} page(s)",
+            seen=f"{len(readings)} page(s)",
             progress=progress,
         )
 
+    texts = [r[c] for r, c in zip(readings, chosen, strict=True)]
     hit_pages = [searchable[index] for index in where]
     matches = [_describe(texts[index], start, end, groups, searchable[index]) for index, start, end, groups in raw]
 

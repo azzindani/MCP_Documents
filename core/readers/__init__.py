@@ -187,6 +187,12 @@ def load_page(doc: Document, number: int) -> Page:
     return reader_for(doc.source).load_page(doc, number)
 
 
+def search_text(doc: Document, number: int) -> str:
+    """The text find() searches: the reader's reading-order text where it has one, else the page's."""
+    found = capability(doc, "search_text")
+    return found(doc, number) if found else load_page(doc, number).text
+
+
 def load_page_words(doc: Document, number: int) -> Page:
     return reader_for(doc.source).load_page_words(doc, number)
 

@@ -80,9 +80,34 @@ def _count(pattern: re.Pattern[str], texts: list[str], ceiling: int) -> tuple[in
     return total, hits, where
 
 
-def _scan(source: str, flags: int, texts: list[str], ceiling: int, conn) -> None:
+def _count_readings(
+    pattern: re.Pattern[str], readings: list[tuple[str, ...]], ceiling: int
+) -> tuple[int, list[Hit], list[int], list[int]]:
+    """_count over pages that may be read more than one way, and which reading each page was searched in.
+
+    A page with two readings -- as drawn, and as it reads (core/readers/pdf.py
+    search_text) -- is searched in the one where the pattern matches most, the
+    first on a tie. Neither reading is right for every page: re-reading an
+    invoice by line puts "Total:" beside its amount, and on a few pages of the
+    corpus splits a word the drawn order kept whole. Taking the reading that
+    matches more can only ever find what the drawn order found, or more.
+    """
+    chosen: list[int] = []
+    for alternatives in readings:
+        best, most = 0, -1
+        if len(alternatives) > 1:
+            for k, text in enumerate(alternatives):
+                found = sum(1 for _ in pattern.finditer(text))
+                if found > most:
+                    best, most = k, found
+        chosen.append(best)
+    total, hits, where = _count(pattern, [r[c] for r, c in zip(readings, chosen, strict=True)], ceiling)
+    return total, hits, where, chosen
+
+
+def _scan(source: str, flags: int, readings: list[tuple[str, ...]], ceiling: int, conn) -> None:
     """Run in the child. Sends the counts and exits."""
-    conn.send(_count(re.compile(source, flags), texts, ceiling))
+    conn.send(_count_readings(re.compile(source, flags), readings, ceiling))
     conn.close()
 
 
@@ -99,6 +124,18 @@ def finditer_bounded(
     regardless, because a truncated list that cannot say how much it truncated
     is the failure this repo keeps finding.
     """
+    total, hits, where, _ = _bounded(source, flags, [(text,) for text in texts], ceiling, timeout)
+    return total, hits, where
+
+
+def _bounded(
+    source: str,
+    flags: int,
+    readings: list[tuple[str, ...]],
+    ceiling: int,
+    timeout: float | None = None,
+) -> tuple[int, list[Hit], list[int], list[int]]:
+    """finditer_bounded over readings, in a child that can be killed."""
     seconds = budget.regex_seconds() if timeout is None else timeout
     # The platform DEFAULT start method, deliberately: forkserver on Linux
     # since 3.14, spawn on macOS and Windows. All three pickle their arguments,
@@ -117,7 +154,7 @@ def finditer_bounded(
         # change again, and this guard silently stops being safe if it does.
         process_type = mp.get_context("spawn").Process
     parent, child = ctx.Pipe(duplex=False)
-    process = process_type(target=_scan, args=(source, flags, texts, ceiling, child), daemon=True)
+    process = process_type(target=_scan, args=(source, flags, readings, ceiling, child), daemon=True)
     process.start()
     child.close()  # only the child writes; the parent's copy must go or poll() never ends
     try:
@@ -126,7 +163,7 @@ def finditer_bounded(
         # for the deadline on every large result rather than on a runaway one.
         if not parent.poll(seconds):
             raise ScanTimeout(seconds)
-        answer: tuple[int, list[Hit], list[int]] = parent.recv()
+        answer: tuple[int, list[Hit], list[int], list[int]] = parent.recv()
     except EOFError as exc:  # the child died without sending: a crash, not a timeout
         raise ScanTimeout(seconds) from exc
     finally:
@@ -149,3 +186,12 @@ def matches_of(
     if guarded:
         return finditer_bounded(source, flags, texts, ceiling)
     return _count(re.compile(source, flags), texts, ceiling)
+
+
+def matches_in_readings(
+    readings: list[tuple[str, ...]], source: str, flags: int, ceiling: int, guarded: bool
+) -> tuple[int, list[Hit], list[int], list[int]]:
+    """matches_of over pages with one or more readings; the last list is the reading each page was searched in."""
+    if guarded:
+        return _bounded(source, flags, readings, ceiling)
+    return _count_readings(re.compile(source, flags), readings, ceiling)

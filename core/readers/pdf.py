@@ -25,10 +25,12 @@ server's own contract forbids. The two return identical text.
 
 from __future__ import annotations
 
+import math
 import re
 from pathlib import Path
 
 import pypdfium2 as pdfium
+import pypdfium2.raw as pdfium_c
 
 from core.ir import MIN_CHARS_FOR_TEXT_LAYER, Basis, Block, Document, Page, Span
 from core.readers import ReaderError
@@ -156,6 +158,93 @@ def load_page(doc: Document, number: int) -> Page:
 
     doc.pages[number] = page
     return page
+
+
+# A text stream that climbs back up the page more often than this is not in
+# reading order. Measured: born-digital regulation and contract pages climb 0-2
+# times (a running head, a column break); a SuperStore invoice 25 times (its
+# values are drawn before their labels) and a scanned tax invoice's OCR layer 19.
+SCRAMBLED_CLIMBS = 3
+ROTATED = 0.1  # radians off horizontal, either way round
+
+
+def search_text(doc: Document, number: int) -> str:
+    """The page's text in the order it reads, for find() to search. 1-based.
+
+    find() searched the text layer in stream order, while extract() and
+    read_page() show reading order. On a form the two differ: a SuperStore
+    invoice's stream holds "$636.24 $82.40 $718.64" and, further on, "Subtotal:
+    Shipping: Total:", so a find() for "Total: $<amount>" -- written from the
+    "Total: $718.64" the caller had just read -- matched nothing on 9 of 9.
+
+    Reading order proper (core/order.py) costs 57x the stream text, which would
+    break find's whole point on a 600-page file. pdfium's own text segments cost
+    about 3x, and sorting them into lines is enough for the pages that need it.
+    So the stream stays as it is where it already reads top to bottom -- which
+    also keeps a two-column page in column order -- and a page whose stream
+    climbs back up the page more than SCRAMBLED_CLIMBS times is re-read by line.
+    find() searches both readings of such a page and keeps the one the pattern
+    matches more of (core/scan.py), because re-reading by line also splits a
+    word here and there that the drawn order kept whole.
+    """
+    page = load_page(doc, number)
+    pdf = doc.handle
+    if pdf is None:
+        raise PdfError("The document handle is closed.", "Call open_document() again before reading pages.")
+    textpage = pdf[number - 1].get_textpage()
+    segments = []
+    for i in range(textpage.count_rects()):
+        left, bottom, right, top = textpage.get_rect(i)
+        text = textpage.get_text_bounded(left, bottom, right, top)
+        if text.strip():
+            segments.append((top, bottom, left, right, text.strip()))
+    climbs = sum(1 for a, b in zip(segments, segments[1:]) if b[0] > a[0] + (a[0] - a[1]))
+    if climbs <= SCRAMBLED_CLIMBS:
+        return page.text
+    # Re-read by character, with LOOSE boxes: the font's ascent and advance
+    # rather than the ink. Tight boxes put a comma below the letters beside it
+    # (", ," on a line of its own) and open a gap after a narrow "1" wider than
+    # a word space ("$91 1 04"); loose boxes share a line's height and touch
+    # inside a word. Only scrambled pages pay for the per-character walk.
+    #
+    # A page with rotated text keeps its stream order. Sorting by height turns
+    # a vertical column header -- "Jumlah ekuitas/ Total equity" set at 270
+    # degrees in a statement of changes in equity -- into one letter per line,
+    # and a phrase find() matched as drawn stopped matching at all.
+    chars = []
+    for i in range(textpage.count_chars()):
+        char = textpage.get_text_range(index=i, count=1)
+        if not char or char in "\r\n":
+            continue
+        angle = pdfium_c.FPDFText_GetCharAngle(textpage.raw, i)  # radians; -1 when pdfium cannot say
+        if not char.isspace() and ROTATED < angle < 2 * math.pi - ROTATED:
+            return page.text
+        left, bottom, right, top = textpage.get_charbox(i, loose=True)
+        chars.append((top, bottom, left, right, char))
+    lines: list[list[tuple]] = []
+    for char in sorted(chars, key=lambda c: (-(c[0] + c[1]) / 2, c[2])):
+        if lines:
+            top = min(c[0] for c in lines[-1])
+            bottom = max(c[1] for c in lines[-1])
+            overlap = min(top, char[0]) - max(bottom, char[1])
+            if overlap > min(top - bottom, char[0] - char[1]) / 2:
+                lines[-1].append(char)
+                continue
+        lines.append([char])
+    out = []
+    for line in lines:
+        text = ""
+        previous = None
+        for top, bottom, left, right, char in sorted(line, key=lambda c: c[2]):
+            if char.isspace():
+                text += "" if text.endswith(" ") else " "
+            else:
+                if previous is not None and left - previous > (top - bottom) / 4 and not text.endswith(" "):
+                    text += " "
+                text += char
+            previous = right
+        out.append(text.strip())
+    return "\n".join(line for line in out if line)
 
 
 def _has_drawable_content(raw) -> bool:
