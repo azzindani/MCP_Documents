@@ -31,7 +31,7 @@ WHITESPACE_SETTINGS: dict[str, Any] = {"vertical_strategy": "text", "horizontal_
 # What a reconstruction is worth. Not a measurement -- there is no ground truth
 # at run time -- but a stable statement of method quality, so a caller can
 # filter on it. The ruled figure is high because the grid came from the file.
-CONFIDENCE = {"ruled": 0.95, "whitespace": 0.5}
+CONFIDENCE = {"ruled": 0.95, "whitespace": 0.5, "ruled_header": 0.8}
 
 
 def extract_page_tables(plumbed_page, prefer_ruled: bool = True) -> list[dict]:
@@ -89,18 +89,30 @@ def _run(plumbed_page, settings: dict, basis: Basis) -> list[dict]:
         rows = [row for row in rows if any(cell for cell in row)]
         if not rows:
             continue
+        bbox = [round(float(v), 2) for v in table.bbox]
+        body: list[list[str]] = []
+        if basis == "ruled" and len(table.rows) == 1:
+            body, bottom = _rows_under_header(table, words)
+            if body:
+                rows = rows + body
+                bbox[3] = round(bottom, 2)
         entry: dict[str, Any] = {
             "page": plumbed_page.page_number,
             "rows": rows,
             "shape": [len(rows), max(len(r) for r in rows)],
             "basis": basis,
-            "confidence": CONFIDENCE[basis],
+            "confidence": CONFIDENCE["ruled_header"] if body else CONFIDENCE[basis],
             # Where on the page the grid sits. A caller rendering the page
             # around a table needs to know which words the table already
             # accounts for -- to_markdown prints every cell twice without it,
             # once inside the grid and once as loose text beside it.
-            "bbox": [round(float(v), 2) for v in table.bbox],
+            "bbox": bbox,
         }
+        if body:
+            entry["note"] = (
+                f"the header row is ruled; the {len(body)} row(s) under it are not, and were read into "
+                "its columns by alignment. Verify them before use."
+            )
         if basis == "whitespace":
             entry["note"] = (
                 "column boundaries inferred from gaps; verify the shape before use. "
@@ -108,6 +120,67 @@ def _run(plumbed_page, settings: dict, basis: Basis) -> list[dict]:
             )
         out.append(entry)
     return out
+
+
+def _rows_under_header(table, words: list[dict]) -> tuple[list[list[str]], float]:
+    """The unruled rows under a table whose only ruled row is its header.
+
+    An invoice draws its column headings in a shaded band and its line items as
+    plain text beneath: the line strategy finds a one-row table, the header, and
+    every item was dropped -- on all nine SuperStore invoices in the corpus the
+    whole "table" was `Item | Quantity | Rate | Amount`, at 0.95 confidence.
+
+    The header's own cells are the columns. Text lines under it are read into
+    them while they stay inside the table's width and close together: a line
+    filling two or more columns is a new row, a line inside one column is the
+    row above wrapping (the item's category line). The first gap wider than one
+    and a half lines, or a line reaching outside the table, ends it -- on the
+    invoices that is the gap above the Subtotal block.
+    """
+    x0, _top, x1, header_bottom = table.bbox
+    columns = [(cell[0], cell[2]) for cell in table.rows[0].cells if cell is not None]
+    if len(columns) < 2:
+        return [], header_bottom
+    below = [w for w in words if w["top"] >= header_bottom - 0.5]
+    lines: list[list[dict]] = []
+    for word in _reading_order(below):
+        if lines and _same_line(lines[-1], word):
+            lines[-1].append(word)
+        else:
+            lines.append([word])
+    rows: list[list[str]] = []
+    prev_bottom = header_bottom
+    for line in lines:
+        top = min(w["top"] for w in line)
+        height = max(w["bottom"] - w["top"] for w in line)
+        if top - prev_bottom > 1.5 * height:
+            break
+        if any((w["x0"] + w["x1"]) / 2 < x0 or (w["x0"] + w["x1"]) / 2 > x1 for w in line):
+            break
+        cells = [""] * len(columns)
+        for w in line:
+            centre = (w["x0"] + w["x1"]) / 2
+            i = next((i for i, (a, b) in enumerate(columns) if a <= centre <= b), None)
+            if i is not None:
+                cells[i] = f"{cells[i]} {w['text']}".strip()
+        filled = [i for i, c in enumerate(cells) if c]
+        if len(filled) >= 2 or not rows:
+            rows.append(cells)
+        else:
+            rows[-1][filled[0]] = f"{rows[-1][filled[0]]} {cells[filled[0]]}".strip()
+        prev_bottom = max(w["bottom"] for w in line)
+    if rows and sum(1 for c in rows[0] if c) < 2:
+        return [], header_bottom
+    return rows, prev_bottom
+
+
+def _same_line(line: list[dict], word: dict) -> bool:
+    """The overlap test `_reading_order` uses, for one word against a line."""
+    top = max(w["top"] for w in line)
+    bottom = min(w["bottom"] for w in line)
+    overlap = min(bottom, word["bottom"]) - max(top, word["top"])
+    shorter = min(bottom - top, word["bottom"] - word["top"])
+    return shorter > 0 and overlap > shorter / 2
 
 
 def _rows_from_words(table, words: list[dict]) -> list[list[str]]:

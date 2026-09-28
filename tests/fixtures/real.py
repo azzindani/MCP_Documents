@@ -60,6 +60,7 @@ DOCUMENTS: dict[str, tuple[str, str]] = {
     "scanned_resume": ("recruitment/resume_95.pdf", "a resume that is a photograph"),
     # Born-digital, ordinary. The control for everything above.
     "digital_invoice": ("corporate_finance/invoice_IN-11664.pdf", "1 page, clean text layer"),
+    "superstore_invoice": ("corporate_finance/invoice_009.pdf", "a ruled header band over unruled item rows"),
     "contract": (
         "legal/contract_ZogenixInc_20190509_10-Q_EX-10.2_11663146_EX-10.2_Consulting Agreement.pdf",
         "68 pages of dense legal prose",
